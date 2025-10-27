@@ -1,7 +1,7 @@
 # 默认配置 - 使用预构建的Docker镜像
 # 使用方式: docker-compose up -d
 #
-# 镜像会从 GitHub Container Registry (ghcr.io) 自动拉取
+# 镜像会从 GitHub Container Registry 加速镜像 (ghcr.nju.edu.cn) 自动拉取
 # 如果需要本地构建镜像（开发环境），请注释掉 image 行，取消注释 build 部分
 
 services:
@@ -10,7 +10,7 @@ services:
     image: redis:7-alpine
     container_name: wharttest-redis
     ports:
-      - "6379:6379"
+      - "8911:6379"
     volumes:
       - redis-data:/data
     networks:
@@ -25,17 +25,17 @@ services:
 
   # 后端 Django 服务
   backend:
-    image: ghcr.io/mg-duan/wharttest-backend:main
+    image: ghcr.nju.edu.cn/mg-duan/wharttest-backend:main
     # 如果需要本地构建，注释掉上面的image行，取消注释下面的build部分
     # build:
     #   context: ./WHartTest_Django
     #   dockerfile: Dockerfile
     container_name: wharttest-backend
     ports:
-      - "8000:8000"
+      - "8912:8000"
     volumes:
-      - ./WHartTest_Django/db.sqlite3:/app/db.sqlite3
-      - ./WHartTest_Django/media:/app/media
+      - ./data/db.sqlite3:/app/db.sqlite3
+      - ./data/media:/app/media
       - backend-static:/app/static
     environment:
       - DJANGO_DEBUG=True
@@ -63,7 +63,7 @@ services:
 
   # Celery Worker 服务
   celery-worker:
-    image: ghcr.io/mg-duan/wharttest-backend:main
+    image: ghcr.nju.edu.cn/mg-duan/wharttest-backend:main
     # 如果需要本地构建，注释掉上面的image行，取消注释下面的build部分
     # build:
     #   context: ./WHartTest_Django
@@ -71,8 +71,8 @@ services:
     container_name: wharttest-celery-worker
     command: celery -A wharttest_django worker -l info --concurrency=4
     volumes:
-      - ./WHartTest_Django/db.sqlite3:/app/db.sqlite3
-      - ./WHartTest_Django/media:/app/media
+      - ./data/db.sqlite3:/app/db.sqlite3
+      - ./data/media:/app/media
       - backend-static:/app/static
     environment:
       - DJANGO_DEBUG=True
@@ -100,7 +100,7 @@ services:
 
   # Celery Beat 服务 (定时任务调度器，可选)
   celery-beat:
-    image: ghcr.io/mg-duan/wharttest-backend:main
+    image: ghcr.nju.edu.cn/mg-duan/wharttest-backend:main
     # 如果需要本地构建，注释掉上面的image行，取消注释下面的build部分
     # build:
     #   context: ./WHartTest_Django
@@ -108,7 +108,7 @@ services:
     container_name: wharttest-celery-beat
     command: celery -A wharttest_django beat -l info --schedule=/app/beat-schedule/celerybeat-schedule
     volumes:
-      - ./WHartTest_Django/db.sqlite3:/app/db.sqlite3
+      - ./data/db.sqlite3:/app/db.sqlite3
       - celery-beat-schedule:/app/beat-schedule
     environment:
       - DJANGO_DEBUG=True
@@ -129,14 +129,14 @@ services:
 
   # 前端 Vue 服务
   frontend:
-    image: ghcr.io/mg-duan/wharttest-frontend:main
+    image: ghcr.nju.edu.cn/mg-duan/wharttest-frontend:main
     # 如果需要本地构建，注释掉上面的image行，取消注释下面的build部分
     # build:
     #   context: ./WHartTest_Vue
     #   dockerfile: Dockerfile
     container_name: wharttest-frontend
     ports:
-      - "80:80"
+      - "8913:80"
     depends_on:
       - backend
     networks:
@@ -151,7 +151,7 @@ services:
 
   # MCP 服务（独立容器）
   mcp:
-    image: ghcr.io/mg-duan/wharttest-mcp:main
+    image: ghcr.nju.edu.cn/mg-duan/wharttest-mcp:main
     # 如果需要本地构建，注释掉上面的image行，取消注释下面的build部分
     # build:
     #   context: ./WHartTest_MCP
@@ -166,10 +166,10 @@ services:
       - MS_ACCESS_KEY=${MS_ACCESS_KEY:-your_16byte_key1}
       - MS_SECRET_KEY=${MS_SECRET_KEY:-your_16byte_key2}
     ports:
-      - "8006:8006"  # WHartTest_tools 服务端口
-      - "8007:8007"  # ms_mcp_api 服务端口
+      - "8914:8006"  # WHartTest_tools 服务端口
+      - "8915:8007"  # ms_mcp_api 服务端口
     volumes:
-      - ./playwright-screenshots:/tmp/playwright-output  # 使用本地目录挂载
+      - ./data/playwright-screenshots:/tmp/playwright-output  # 使用本地目录挂载
     depends_on:
       - backend
     networks:
@@ -195,9 +195,9 @@ services:
       "--config", "/app/playwright-mcp-config.json"
     ]
     ports:
-      - "8931:8931"
+      - "8916:8931"
     volumes:
-      - ./playwright-screenshots:/tmp/playwright-output  # 使用本地目录挂载
+      - ./data/playwright-screenshots:/tmp/playwright-output  # 使用本地目录挂载
       - ./WHartTest_MCP/playwright-mcp-config.json:/app/playwright-mcp-config.json:ro  # 挂载配置文件
     networks:
       - wharttest-network
@@ -217,4 +217,5 @@ volumes:
   backend-static:
   redis-data:
   celery-beat-schedule:
+  # db.sqlite3 和 media 改用本地目录挂载，不再需要 named volume
   # playwright-screenshots 改用本地目录挂载，不再需要 named volume
