@@ -623,10 +623,14 @@ class TestExecutionViewSet(viewsets.ModelViewSet):
             status='pending'
         )
         
-        # 异步启动执行任务
-        task = execute_test_suite.delay(execution.id)
-        execution.celery_task_id = task.id
-        execution.save(update_fields=['celery_task_id'])
+        # 使用transaction.on_commit()确保数据库事务提交后再启动Celery任务
+        # Django和Celery在同一容器中运行,共享同一数据库连接,避免查询不到记录的问题
+        def start_execution_task():
+            task = execute_test_suite.delay(execution.id)
+            # 更新celery_task_id
+            TestExecution.objects.filter(id=execution.id).update(celery_task_id=task.id)
+        
+        transaction.on_commit(start_execution_task)
         
         # 返回创建的执行记录
         result_serializer = TestExecutionSerializer(execution, context={'request': request})

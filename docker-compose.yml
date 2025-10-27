@@ -23,7 +23,7 @@ services:
       retries: 5
     command: redis-server --appendonly yes
 
-  # 后端 Django 服务
+  # 后端 Django 服务（包含Celery Worker和Beat）
   backend:
     image: ghcr.io/mg-duan/wharttest-backend:main
     # 如果需要本地构建，注释掉上面的image行，取消注释下面的build部分
@@ -31,6 +31,8 @@ services:
     #   context: ./WHartTest_Django
     #   dockerfile: Dockerfile
     container_name: wharttest-backend
+    # 启动Django、Celery Worker和Celery Beat在同一容器
+    command: bash -c "python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:8000 & celery -A wharttest_django worker -l info --concurrency=4 & celery -A wharttest_django beat -l info --schedule=/app/data/celerybeat-schedule & wait"
     ports:
       - "8912:8000"
     volumes:
@@ -49,6 +51,8 @@ services:
       # Celery配置
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      # 内部API基础URL - 使用localhost因为在同一容器
+      - DJANGO_BASE_URL=http://localhost:8000
     depends_on:
       redis:
         condition: service_healthy
@@ -61,74 +65,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-
-  # Celery Worker 服务
-  celery-worker:
-    image: ghcr.io/mg-duan/wharttest-backend:main
-    # 如果需要本地构建，注释掉上面的image行，取消注释下面的build部分
-    # build:
-    #   context: ./WHartTest_Django
-    #   dockerfile: Dockerfile
-    container_name: wharttest-celery-worker
-    command: bash -c "python manage.py migrate --noinput && celery -A wharttest_django worker -l info --concurrency=4"
-    volumes:
-      - ./data:/app/data
-      - backend-static:/app/static
-    environment:
-      - DATABASE_PATH=/app/data/db.sqlite3
-      - MEDIA_ROOT=/app/data/media
-      - DJANGO_DEBUG=True
-      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:-django-insecure-change-this-in-production}
-      - DJANGO_ALLOWED_HOSTS=${DJANGO_ALLOWED_HOSTS:-*}
-      # Celery配置
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      # 内部API基础URL - 使用Docker服务名
-      - DJANGO_BASE_URL=http://backend:8000
-    depends_on:
-      redis:
-        condition: service_healthy
-      backend:
-        condition: service_healthy
-    networks:
-      - wharttest-network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "celery", "-A", "wharttest_django", "inspect", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
-  # Celery Beat 服务 (定时任务调度器，可选)
-  celery-beat:
-    image: ghcr.io/mg-duan/wharttest-backend:main
-    # 如果需要本地构建，注释掉上面的image行，取消注释下面的build部分
-    # build:
-    #   context: ./WHartTest_Django
-    #   dockerfile: Dockerfile
-    container_name: wharttest-celery-beat
-    command: bash -c "python manage.py migrate --noinput && celery -A wharttest_django beat -l info --schedule=/app/beat-schedule/celerybeat-schedule"
-    volumes:
-      - ./data:/app/data
-      - celery-beat-schedule:/app/beat-schedule
-    environment:
-      - DATABASE_PATH=/app/data/db.sqlite3
-      - DJANGO_DEBUG=True
-      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:-django-insecure-change-this-in-production}
-      # Celery配置
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      # 内部API基础URL - 使用Docker服务名
-      - DJANGO_BASE_URL=http://backend:8000
-    depends_on:
-      redis:
-        condition: service_healthy
-      backend:
-        condition: service_healthy
-    networks:
-      - wharttest-network
-    restart: unless-stopped
 
   # 前端 Vue 服务
   frontend:
