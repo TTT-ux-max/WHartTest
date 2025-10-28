@@ -10,10 +10,18 @@ import type {
 } from '@/features/langgraph/types/chat';
 
 // --- 全局流式状态管理 ---
+interface StreamMessage {
+  content: string;
+  type: 'human' | 'ai' | 'tool' | 'system';
+  time: string;
+  isExpanded?: boolean;
+}
+
 interface StreamState {
   content: string;
   error?: string;
   isComplete: boolean;
+  messages: StreamMessage[]; // 存储所有消息,包括工具消息
 }
 
 export const activeStreams = ref<Record<string, StreamState>>({});
@@ -223,11 +231,59 @@ export async function sendChatMessageStream(
               activeStreams.value[streamSessionId] = {
                 content: '',
                 isComplete: false,
+                messages: []
               };
               onStart(streamSessionId);
             }
           }
 
+          // 处理工具消息(update事件)
+          if (parsed.type === 'update' && streamSessionId && activeStreams.value[streamSessionId]) {
+            const updateData = parsed.data;
+            if (typeof updateData === 'string') {
+              // 解析工具消息
+              // 格式类似: "{'agent': {'messages': [ToolMessage(content='...', name='tool_name', ...)]}}"
+              if (updateData.includes('ToolMessage')) {
+                try {
+                  // 提取工具消息内容
+                  const contentMatch = updateData.match(/content='([^']*(?:\\'[^']*)*)'/);
+                  const nameMatch = updateData.match(/name='([^']*)'/);
+                  
+                  if (contentMatch) {
+                    const toolContent = contentMatch[1].replace(/\\'/g, "'").replace(/\\n/g, '\n');
+                    const toolName = nameMatch ? nameMatch[1] : 'tool';
+                    
+                    const now = new Date();
+                    const time = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+                    
+                    // 🔧 如果当前有AI流式内容,先将其固化为独立消息
+                    if (activeStreams.value[streamSessionId].content && activeStreams.value[streamSessionId].content.trim()) {
+                      activeStreams.value[streamSessionId].messages.push({
+                        content: activeStreams.value[streamSessionId].content,
+                        type: 'ai',
+                        time: time,
+                        isExpanded: false
+                      });
+                      // 清空AI内容,准备接收新的内容
+                      activeStreams.value[streamSessionId].content = '';
+                    }
+                    
+                    // 添加工具消息作为新的独立消息
+                    activeStreams.value[streamSessionId].messages.push({
+                      content: toolContent,
+                      type: 'tool',
+                      time: time,
+                      isExpanded: false
+                    });
+                  }
+                } catch (e) {
+                  console.warn('Failed to parse tool message:', updateData);
+                }
+              }
+            }
+          }
+
+          // 处理AI消息(message事件)
           if (parsed.type === 'message' && streamSessionId && activeStreams.value[streamSessionId]) {
             const messageData = parsed.data;
             if (typeof messageData === 'string') {

@@ -79,20 +79,37 @@
             <router-link to="/requirements">需求管理</router-link>
           </a-menu-item>
 
-          <a-menu-item key="testcases" v-if="hasTestcasesPermission">
-            <template #icon><icon-code-block /></template>
-            <router-link to="/testcases">用例管理</router-link>
-          </a-menu-item>
+          <!-- 展开状态下显示测试管理子菜单 -->
+          <template v-if="!collapsed && hasTestManagementMenuItems">
+            <a-sub-menu key="test-management">
+              <template #icon><icon-code-block /></template>
+              <template #title>
+                <span @click="handleTestManagementClick">测试管理</span>
+              </template>
+              <a-menu-item key="testcases" v-if="hasTestcasesPermission">
+                <template #icon><icon-code-block /></template>
+                <router-link to="/testcases">用例管理</router-link>
+              </a-menu-item>
+              <a-menu-item key="testsuites" v-if="hasTestSuitesPermission">
+                <template #icon><icon-folder /></template>
+                <router-link to="/testsuites">测试套件</router-link>
+              </a-menu-item>
+              <a-menu-item key="test-executions" v-if="hasTestExecutionsPermission">
+                <template #icon><icon-history /></template>
+                <router-link to="/test-executions">执行历史</router-link>
+              </a-menu-item>
+            </a-sub-menu>
+          </template>
 
-          <a-menu-item key="testsuites" v-if="hasTestSuitesPermission">
-            <template #icon><icon-folder /></template>
-            <router-link to="/testsuites">测试套件</router-link>
-          </a-menu-item>
-
-          <a-menu-item key="test-executions" v-if="hasTestExecutionsPermission">
-            <template #icon><icon-history /></template>
-            <router-link to="/test-executions">执行历史</router-link>
-          </a-menu-item>
+          <!-- 收起状态下只显示测试管理图标 -->
+          <template v-else-if="collapsed && hasTestManagementMenuItems">
+            <a-menu-item key="test-management">
+              <template #icon>
+                <icon-code-block @click="handleTestManagementClick" style="cursor: pointer;" />
+              </template>
+              <span style="display: none;">测试管理</span>
+            </a-menu-item>
+          </template>
 
           <a-menu-item key="langgraph-chat" v-if="hasLangGraphChatPermission">
             <template #icon><icon-message /></template>
@@ -248,6 +265,7 @@ const activeMenu = computed(() => {
   if (path.startsWith('/langgraph-chat')) return 'langgraph-chat'; // 添加对新路由的识别
   if (path.startsWith('/knowledge-management')) return 'knowledge-management'; // 添加对知识库管理路由的识别
   if (path.startsWith('/api-keys')) return 'api-keys'; // 添加对API Key路由的识别
+  if (path.startsWith('/remote-mcp-configs')) return 'remote-mcp-configs'; // 添加对MCP配置路由的识别
   // 其他路由对应的菜单项
   return '';
 });
@@ -316,6 +334,13 @@ const hasMcpConfigsPermission = computed(() => {
   return authStore.hasPermission('mcp_tools.view_remotemcpconfig');
 });
 
+// 检查是否有测试管理菜单项的权限
+const hasTestManagementMenuItems = computed(() => {
+  return hasTestcasesPermission.value ||
+         hasTestSuitesPermission.value ||
+         hasTestExecutionsPermission.value;
+});
+
 // 检查是否有系统管理菜单项的权限
 const hasSystemMenuItems = computed(() => {
   return hasUsersPermission.value ||
@@ -329,6 +354,33 @@ const hasSystemMenuItems = computed(() => {
 // 切换侧边栏收起状态
 const toggleCollapse = () => {
   collapsed.value = !collapsed.value;
+};
+
+// 处理点击测试管理图标的事件
+const handleTestManagementClick = (event: MouseEvent) => {
+  // 阻止事件冒泡，防止触发其他事件
+  if (event) {
+    event.stopPropagation();
+  }
+
+  // 如果是收起状态，点击测试管理图标时展开侧边栏
+  if (collapsed.value) {
+    collapsed.value = false;
+    // 展开测试管理子菜单
+    openKeys.value = ['test-management'];
+  } else {
+    // 如果已经展开，则切换子菜单的展开状态
+    if (openKeys.value.includes('test-management')) {
+      openKeys.value = openKeys.value.filter(key => key !== 'test-management');
+    } else {
+      openKeys.value.push('test-management');
+    }
+  }
+
+  // 确保状态更新后立即应用
+  nextTick(() => {
+    console.log('测试管理菜单状态更新:', openKeys.value);
+  });
 };
 
 // 处理点击系统管理图标的事件

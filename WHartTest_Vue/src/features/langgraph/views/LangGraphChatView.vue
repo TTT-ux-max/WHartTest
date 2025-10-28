@@ -231,11 +231,13 @@ const loadSessionsFromServer = async () => {
       // 获取到会话ID列表后，需要为每个会话获取历史记录以显示标题
       const sessionsData = response.data.sessions;
 
-      // 先清空现有会话列表
-      chatSessions.value = [];
+      // 🔧 修复：使用临时数组收集会话，避免直接操作 chatSessions.value 导致的重复问题
+      const tempSessions: ChatSession[] = [];
 
-      // 如果没有会话，直接返回
+      // 如果没有会话，清空列表并返回
       if (sessionsData.length === 0) {
+        chatSessions.value = [];
+        saveSessionsToStorage();
         isLoading.value = false;
         return;
       }
@@ -277,8 +279,8 @@ const loadSessionsFromServer = async () => {
                 }
               }
 
-              // 添加到会话列表
-              chatSessions.value.push({
+              // 🔧 修复：添加到临时数组，避免重复
+              tempSessions.push({
                 id: sessionId,
                 title,
                 lastTime,
@@ -291,21 +293,24 @@ const loadSessionsFromServer = async () => {
         }));
       }
 
-      // 按时间倒序排序会话列表
-      chatSessions.value.sort((a, b) => b.lastTime.getTime() - a.lastTime.getTime());
+      // 🔧 修复：按时间倒序排序后，一次性替换整个列表
+      tempSessions.sort((a, b) => b.lastTime.getTime() - a.lastTime.getTime());
+      chatSessions.value = tempSessions;
+
+      console.log(`✅ 从服务器加载了 ${tempSessions.length} 个会话`);
 
       // 保存到本地存储作为备份
       saveSessionsToStorage();
     } else {
       Message.error('获取会话列表失败');
-      // 如果服务器获取失败，尝试从本地存储加载
-      loadSessionsFromStorage();
+      // 🔧 修复：如果服务器获取失败，不从本地存储加载，避免加载旧的重复数据
+      // loadSessionsFromStorage();
     }
   } catch (error) {
     console.error('获取会话列表失败:', error);
-    Message.error('获取会话列表失败，将使用本地缓存');
-    // 如果服务器请求出错，尝试从本地存储加载
-    loadSessionsFromStorage();
+    Message.error('获取会话列表失败，请稍后重试');
+    // 🔧 修复：如果服务器请求出错，不从本地存储加载，避免加载旧的重复数据
+    // loadSessionsFromStorage();
   } finally {
     isLoading.value = false;
   }
@@ -348,10 +353,12 @@ const loadChatHistory = async () => {
         messages.value.push(message);
       });
 
-      // 更新会话信息
-      // 获取第一条human类型的消息作为标题
-      const firstHumanMessage = response.data.history.find(msg => msg.type === 'human')?.content;
-      updateSessionInList(response.data.session_id, firstHumanMessage);
+      // 只有在会话列表中不存在该会话时才添加（避免重复）
+      const existingSession = chatSessions.value.find(s => s.id === response.data.session_id);
+      if (!existingSession) {
+        const firstHumanMessage = response.data.history.find(msg => msg.type === 'human')?.content;
+        updateSessionInList(response.data.session_id, firstHumanMessage, false);
+      }
     } else {
       // 如果获取历史失败，可能是会话过期，清除存储的会话ID
       localStorage.removeItem('langgraph_session_id');
@@ -419,6 +426,11 @@ const toggleExpand = (message: ChatMessage) => {
 
 // 添加或更新会话到列表
 const updateSessionInList = (id: string, firstMessage?: string, updateTime: boolean = true) => {
+  if (!id) {
+    console.warn('updateSessionInList: session_id is empty, skipping');
+    return;
+  }
+
   const existingIndex = chatSessions.value.findIndex(s => s.id === id);
   const title = firstMessage ? (firstMessage.length > 20 ? `${firstMessage.substring(0, 20)}...` : firstMessage) : '新对话';
 
@@ -438,7 +450,15 @@ const updateSessionInList = (id: string, firstMessage?: string, updateTime: bool
     if (updateTime) {
       chatSessions.value.sort((a, b) => b.lastTime.getTime() - a.lastTime.getTime());
     }
+    console.log(`updateSessionInList: Updated existing session ${id}`);
   } else {
+    // 添加新会话前，再次检查是否已存在（防止并发问题）
+    const doubleCheckIndex = chatSessions.value.findIndex(s => s.id === id);
+    if (doubleCheckIndex >= 0) {
+      console.warn(`updateSessionInList: Session ${id} already exists, skipping duplicate addition`);
+      return;
+    }
+    
     // 添加新会话
     chatSessions.value.unshift({
       id,
@@ -446,6 +466,7 @@ const updateSessionInList = (id: string, firstMessage?: string, updateTime: bool
       lastTime: new Date(),
       messageCount: messages.value.length || 1
     });
+    console.log(`updateSessionInList: Added new session ${id}`);
   }
 
   // 保存到本地存储
@@ -662,7 +683,7 @@ const handleSendMessage = async (message: string) => {
 
   if (isStreamMode.value) {
     // 流式模式
-    await handleStreamMessage(requestData, message);
+    await handleStreamMessage(requestData);
   } else {
     // 非流式模式
     await handleNormalMessage(requestData, message);
@@ -675,10 +696,24 @@ const displayedMessages = computed(() => {
   // 从共享状态中获取当前会话的流
   const stream = sessionId.value ? activeStreams.value[sessionId.value] : null;
 
-  // 如果当前会话有正在进行的流，则添加一个临时的流式消息用于显示
+  // 如果当前会话有正在进行的流，则添加流式消息
   if (stream && !stream.isComplete) {
-    // 如果有错误，显示错误消息
+    // 首先添加工具消息(如果有)
+    if (stream.messages && stream.messages.length > 0) {
+      stream.messages.forEach(msg => {
+        combined.push({
+          content: msg.content,
+          isUser: false,
+          time: msg.time,
+          messageType: msg.type,
+          isExpanded: msg.isExpanded
+        });
+      });
+    }
+    
+    // 然后处理AI消息
     if (stream.error) {
+      // 如果有错误，显示错误消息
       combined.push({
         content: stream.error,
         isUser: false,
@@ -687,8 +722,8 @@ const displayedMessages = computed(() => {
         isStreaming: false,
       });
     }
-    // 如果流式内容为空或只有空白字符，显示加载中状态
     else if (!stream.content || stream.content.trim() === '') {
+      // 如果流式内容为空或只有空白字符，显示加载中状态
       combined.push({
         content: '',
         isUser: false,
@@ -697,8 +732,8 @@ const displayedMessages = computed(() => {
         isLoading: true,
       });
     }
-    // 有实际内容时，显示流式内容
     else {
+      // 有实际内容时，显示流式内容
       combined.push({
         content: stream.content,
         isUser: false,
@@ -723,8 +758,9 @@ const handleStreamMessage = async (requestData: ChatRequest) => {
     if (isNewSession) {
       sessionId.value = newSessionId;
       saveSessionId(newSessionId);
-      // 创建新会话后，立即刷新左侧列表
-      await loadSessionsFromServer();
+      console.log(`handleStart: New session created with id ${newSessionId}`);
+      // 🔧 修复：不在这里刷新会话列表，避免与后续的 updateSessionInList 冲突
+      // 会话信息会在流完成后通过 loadChatHistory -> updateSessionInList 来更新
     }
   };
 
@@ -761,12 +797,10 @@ const handleNormalMessage = async (requestData: ChatRequest, originalMessage: st
       // 保存会话ID
       if (response.data.session_id) {
         saveSessionId(response.data.session_id);
-        // 如果是新会话，则从服务器刷新列表，否则只在本地更新
-        if (isNewSession) {
-          await loadSessionsFromServer();
-        } else {
-          updateSessionInList(response.data.session_id, undefined);
-        }
+        // 🔧 修复：统一使用 updateSessionInList 更新会话信息，避免重复
+        // 获取用户的第一条消息作为标题
+        const firstUserMessage = originalMessage;
+        updateSessionInList(response.data.session_id, firstUserMessage, true);
       }
 
       // 处理conversation_flow中的新消息
@@ -1037,11 +1071,53 @@ const handlePromptsUpdated = async () => {
 // 监视当前会话的流是否完成
 watch(
   () => (sessionId.value ? activeStreams.value[sessionId.value] : null),
-  (stream) => {
+  async (stream) => {
     if (stream && stream.isComplete) {
       console.log(`会话 ${sessionId.value} 的流已完成。`);
-      // 流结束后，刷新历史记录以持久化最终消息
-      loadChatHistory();
+      
+      // 🔧 修复：流完成后重新加载完整的对话历史，包括工具消息
+      if (sessionId.value && projectStore.currentProjectId) {
+        try {
+          const response = await getChatHistory(sessionId.value, projectStore.currentProjectId);
+          if (response.status === 'success') {
+            // 清空当前消息列表
+            messages.value = [];
+            
+            // 重新加载所有消息（包括工具消息）
+            response.data.history.forEach(historyItem => {
+              // 跳过系统消息
+              if (historyItem.type === 'system') {
+                return;
+              }
+              
+              const message: ChatMessage = {
+                content: historyItem.content,
+                isUser: historyItem.type === 'human',
+                time: formatHistoryTime(historyItem.timestamp),
+                messageType: historyItem.type
+              };
+              
+              // 如果是工具消息，设置默认折叠状态
+              if (historyItem.type === 'tool') {
+                message.isExpanded = false;
+              }
+              
+              messages.value.push(message);
+            });
+            
+            // 更新会话信息（只在新会话时添加到列表）
+            const existingSession = chatSessions.value.find(s => s.id === sessionId.value);
+            if (!existingSession) {
+              const firstHumanMessage = response.data.history.find(msg => msg.type === 'human')?.content;
+              if (firstHumanMessage) {
+                updateSessionInList(sessionId.value, firstHumanMessage, true);
+              }
+            }
+          }
+        } catch (error) {
+          console.error('重新加载对话历史失败:', error);
+        }
+      }
       
       // 清理已完成的流状态，避免不必要的内存占用
       clearStreamState(sessionId.value!);
@@ -1063,10 +1139,11 @@ onMounted(async () => {
   // 加载知识库设置
   loadKnowledgeBaseSettings();
   
-  // 从服务器加载会话列表 - 仅在首次挂载时加载
+  // 🔧 修复：先加载会话列表，再加载当前会话历史
+  // 这样可以避免 loadChatHistory 中的 updateSessionInList 导致重复
   await loadSessionsFromServer();
 
-  // 尝试加载当前会话的历史记录
+  // 尝试加载当前会话的历史记录（只加载消息，不更新会话列表）
   await loadChatHistory();
 
   // 加载当前LLM配置
