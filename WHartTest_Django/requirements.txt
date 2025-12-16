@@ -1,6 +1,6 @@
 # Django Web框架 - BSD许可证 (当前版本: 5.2)
 # https://github.com/django/django/blob/main/LICENSE
-Django==5.2
+Django==5.2.9
 
 # Django REST框架 - BSD许可证 (当前版本: 3.16.0)
 # https://github.com/encode/django-rest-framework/blob/master/LICENSE.md
@@ -8,7 +8,7 @@ djangorestframework==3.16.0
 
 # JWT认证支持 - MIT许可证 (当前版本: 5.3.1)
 # https://github.com/jazzband/djangorestframework-simplejwt/blob/master/LICENSE
-djangorestframework-simplejwt==5.3.1
+djangorestframework-simplejwt==5.5.1
 
 # API文档生成 - BSD许可证 (当前版本: 0.28.0)
 # https://github.com/tfranzel/drf-spectacular/blob/master/LICENSE
@@ -59,7 +59,7 @@ langchain-openai==0.3.17
 
 # LangChain核心库 - MIT许可证 (当前版本: 0.3.60)
 # https://github.com/langchain-ai/langchain/blob/master/libs/core/LICENSE
-langchain-core==0.3.60
+langchain-core==0.3.80
 
 # LangChain实验性功能 - MIT许可证 (当前版本: 0.3.4)
 # https://github.com/langchain-ai/langchain/blob/master/libs/experimental/LICENSE
@@ -67,7 +67,7 @@ langchain-experimental==0.3.4
 
 # LangGraph检查点 - MIT许可证 (当前版本: 2.0.26)
 # https://github.com/langchain-ai/langgraph/blob/main/libs/checkpoint/LICENSE
-langgraph-checkpoint==2.0.26
+langgraph-checkpoint==3.0.0
 
 # LangGraph预构建组件 - MIT许可证 (当前版本: 0.2.2)
 # https://github.com/langchain-ai/langgraph/blob/main/libs/prebuilt/LICENSE
@@ -83,7 +83,7 @@ langsmith==0.3.45
 
 # LangGraph SQLite检查点 - MIT许可证 (当前版本: 2.0.10)
 # https://github.com/langchain-ai/langgraph/blob/main/libs/checkpoint-sqlite/LICENSE
-langgraph-checkpoint-sqlite==2.0.10
+langgraph-checkpoint-sqlite==3.0.1
 
 # LangGraph PostgreSQL检查点 - MIT许可证
 # https://github.com/langchain-ai/langgraph/blob/main/libs/checkpoint-postgres/LICENSE
@@ -107,11 +107,11 @@ openpyxl==3.1.5
 # 知识库依赖
 # LangChain社区库 - MIT许可证 (当前版本: 0.3.24)
 # https://github.com/langchain-ai/langchain/blob/master/libs/community/LICENSE
-langchain-community==0.3.24
+langchain-community==0.3.27
 
 # 文本分割器 - MIT许可证 (当前版本: 0.3.8)
 # https://github.com/langchain-ai/langchain/blob/master/libs/text-splitters/LICENSE
-langchain-text-splitters==0.3.8
+langchain-text-splitters==0.3.9
 
 # Qdrant向量数据库 - Apache 2.0许可证
 # https://github.com/qdrant/qdrant-client/blob/master/LICENSE
@@ -179,7 +179,7 @@ beautifulsoup4==4.13.3
 # 文档处理依赖
 # PDF文件处理 - BSD许可证 (当前版本: 5.6.0)
 # https://github.com/py-pdf/pypdf/blob/main/LICENSE
-pypdf==5.6.0
+pypdf==6.4.0
 
 # Word文档处理 - MIT许可证 (当前版本: 1.1.2)
 # https://github.com/python-openxml/python-docx/blob/master/LICENSE
