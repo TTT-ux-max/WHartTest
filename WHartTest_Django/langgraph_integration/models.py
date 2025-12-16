@@ -6,15 +6,11 @@ from django.utils import timezone
 class LLMConfig(models.Model):
     """
     LLM配置模型 - 管理大语言模型的配置信息
+    统一使用OpenAI兼容格式，支持所有兼容的服务商
     """
     
     PROVIDER_CHOICES = [
-        ('openai', 'OpenAI'),
-        ('anthropic', 'Anthropic/Claude'),
-        ('gemini', 'Google Gemini'),
-        ('qwen', 'Alibaba Qwen'),
-        ('ollama', 'Ollama'),
-        ('openai_compatible', 'OpenAI Compatible'),
+        ('openai_compatible', 'OpenAI 兼容'),
     ]
     
     # 配置标识字段（新增）
@@ -22,7 +18,7 @@ class LLMConfig(models.Model):
                                   help_text="用户自定义的配置名称，如'生产环境OpenAI'、'测试Claude配置'")
     
     # 供应商字段（新增）
-    provider = models.CharField(max_length=50, choices=PROVIDER_CHOICES, default='openai', verbose_name="供应商",
+    provider = models.CharField(max_length=50, choices=PROVIDER_CHOICES, default='openai_compatible', verbose_name="供应商",
                                help_text="LLM服务供应商")
     
     # 模型名称字段（原来的name字段，现在表示具体模型）
@@ -40,6 +36,10 @@ class LLMConfig(models.Model):
     # 多模态支持（新增）
     supports_vision = models.BooleanField(default=False, verbose_name="支持图片输入",
                                         help_text="模型是否支持图片/多模态输入（如GPT-4V、Qwen-VL等）")
+    
+    # 上下文限制（用于Token计数和对话压缩）
+    context_limit = models.IntegerField(default=128000, verbose_name="上下文限制",
+                                       help_text="模型最大上下文Token数（GPT-4o: 128000, Claude: 200000, Gemini: 1000000）")
     
     # 状态字段（保持不变）
     is_active = models.BooleanField(default=False, verbose_name="是否激活",
@@ -74,6 +74,8 @@ class ChatSession(models.Model):
                                   help_text="LangGraph会话的唯一标识符")
     title = models.CharField(max_length=200, verbose_name="对话标题", default="新对话")
     project = models.ForeignKey('projects.Project', on_delete=models.CASCADE, null=True, blank=True, verbose_name="关联项目")
+    prompt = models.ForeignKey('prompts.UserPrompt', on_delete=models.SET_NULL, null=True, blank=True,
+                               verbose_name="关联提示词", help_text="该会话使用的提示词")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="更新时间")
 

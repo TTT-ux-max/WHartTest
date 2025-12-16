@@ -17,6 +17,10 @@ export interface ChatRequest {
 
   // 多模态相关参数
   image?: string; // 图片base64编码（不含前缀），可选
+  
+  // Playwright 脚本生成参数
+  generate_playwright_script?: boolean; // 是否在任务完成后自动生成 Playwright 脚本
+  test_case_id?: number; // 关联的测试用例ID，生成脚本时必需
 }
 
 /**
@@ -45,8 +49,14 @@ export interface ChatHistoryMessage {
   type: 'human' | 'ai' | 'tool' | 'system'; // 🆕 添加 system 类型
   content: string;
   timestamp: string; // 消息时间戳
-  image?: string; // 🆕 图片Data URL（包含完整的data:image/xxx;base64,前缀）
+  image?: string; // 🆕 图片Data URL(包含完整的data:image/xxx;base64,前缀)
   is_thinking_process?: boolean; // 思考过程标记
+  // ⭐ Agent Loop 历史记录专用字段
+  agent?: string; // 'agent_loop' 表示来自Agent Loop
+  agent_type?: string; // 'intermediate' | 'final' 表示中间/最终响应
+  step?: number; // Agent Loop步骤号
+  max_steps?: number; // Agent Loop最大步骤数
+  sse_event_type?: string; // 'message' | 'tool_result' SSE事件类型
 }
 
 /**
@@ -57,7 +67,21 @@ export interface ChatHistoryResponseData {
   session_id: string;
   project_id: string; // 🆕 新增项目ID字段
   project_name: string; // 🆕 新增项目名称字段
+  prompt_id: number | null; // 🆕 新增提示词ID字段
+  prompt_name: string | null; // 🆕 新增提示词名称字段
   history: ChatHistoryMessage[];
+  context_token_count?: number; // 上下文Token使用量
+  context_limit?: number; // 上下文Token限制
+}
+
+/**
+ * 会话详情（轻量级，用于列表展示）
+ */
+export interface ChatSessionDetail {
+  id: string;
+  title: string;
+  updated_at: string | null;
+  created_at: string | null;
 }
 
 /**
@@ -65,5 +89,6 @@ export interface ChatHistoryResponseData {
  */
 export interface ChatSessionsResponseData {
   user_id: string;
-  sessions: string[]; // 该用户所有 session_id 列表
+  sessions: string[]; // 该用户所有 session_id 列表（向后兼容）
+  sessions_detail?: ChatSessionDetail[]; // 带详情的会话列表
 }

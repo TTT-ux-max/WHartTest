@@ -9,6 +9,14 @@
           @search="onSearch"
           v-model="localSearchKeyword"
         />
+        <a-tree-select
+          v-model="localSelectedModuleId"
+          :data="moduleTree"
+          placeholder="筛选模块"
+          allow-clear
+          style="width: 180px; margin-left: 12px;"
+          @change="onModuleChange"
+        />
         <a-select
           v-model="selectedLevel"
           placeholder="筛选优先级"
@@ -102,11 +110,9 @@
       <template #level="{ record }">
         <a-tag :color="getLevelColor(record.level)">{{ record.level }}</a-tag>
       </template>
-      <template #notes="{ record }">
-        <a-tooltip v-if="record.notes" :content="record.notes">
-          <div class="notes-cell">{{ record.notes }}</div>
-        </a-tooltip>
-        <span v-else>-</span>
+      <template #module="{ record }">
+        <span v-if="record.module_detail">{{ record.module_detail }}</span>
+        <span v-else class="text-gray">未分配</span>
       </template>
       <template #operations="{ record }">
         <a-space :size="10">
@@ -131,13 +137,14 @@ import {
   exportAllTestCasesToExcel,
   exportSelectedTestCasesToExcel,
   type TestCase,
-  type BatchDeleteResponse,
 } from '@/services/testcaseService';
 import { formatDate, getLevelColor } from '@/utils/formatters'; // 假设工具函数已移至此处
+import type { TreeNodeData } from '@arco-design/web-vue';
 
 const props = defineProps<{
   currentProjectId: number | null;
   selectedModuleId?: number | null; // 可选的模块ID，用于筛选
+  moduleTree?: TreeNodeData[]; // 模块树数据
 }>();
 
 const emit = defineEmits<{
@@ -147,9 +154,14 @@ const emit = defineEmits<{
   (e: 'viewTestCase', testCase: TestCase): void;
   (e: 'testCaseDeleted'): void;
   (e: 'executeTestCase', testCase: TestCase): void;
+  (e: 'module-filter-change', moduleId: number | null): void;
 }>();
 
 const { currentProjectId, selectedModuleId } = toRefs(props);
+const moduleTree = computed(() => props.moduleTree || []);
+
+// 本地模块选择（与外部 selectedModuleId 同步）
+const localSelectedModuleId = ref<number | null>(props.selectedModuleId || null);
 
 const loading = ref(false);
 const localSearchKeyword = ref('');
@@ -243,7 +255,7 @@ const columns = [
   { title: '用例名称', dataIndex: 'name', slotName: 'name', width: 240, ellipsis: true, tooltip: false },
   { title: '前置条件', dataIndex: 'precondition', width: 150, ellipsis: true, tooltip: true },
   { title: '优先级', dataIndex: 'level', slotName: 'level', width: 75 },
-  { title: '备注', dataIndex: 'notes', slotName: 'notes', width: 150, ellipsis: true, tooltip: false }, // tooltip is handled by custom slot
+  { title: '所属模块', dataIndex: 'module_detail', slotName: 'module', width: 120, ellipsis: true, tooltip: true },
   {
     title: '创建者',
     dataIndex: 'creator_detail',
@@ -272,7 +284,7 @@ const fetchTestCases = async () => {
       page: paginationConfig.current,
       pageSize: paginationConfig.pageSize,
       search: localSearchKeyword.value,
-      module_id: selectedModuleId?.value || undefined, // 添加模块ID筛选
+      module_id: localSelectedModuleId.value || undefined, // 使用本地模块筛选
       level: selectedLevel.value || undefined, // 添加优先级筛选
     });
     if (response.success && response.data) {
@@ -300,6 +312,13 @@ const fetchTestCases = async () => {
 const onSearch = (value: string) => {
   localSearchKeyword.value = value;
   paginationConfig.current = 1;
+  fetchTestCases();
+};
+
+const onModuleChange = (value: number | null) => {
+  localSelectedModuleId.value = value;
+  paginationConfig.current = 1;
+  emit('module-filter-change', value);
   fetchTestCases();
 };
 
@@ -471,10 +490,13 @@ watch(currentProjectId, () => {
   fetchTestCases();
 });
 
-watch(selectedModuleId, () => {
-  paginationConfig.current = 1; // 模块切换时重置到第一页
-  selectedLevel.value = ''; // 模块变化时清空优先级筛选
-  fetchTestCases();
+// 监听外部模块选择变化（来自左侧模块管理面板）
+watch(selectedModuleId, (newVal) => {
+  if (newVal !== localSelectedModuleId.value) {
+    localSelectedModuleId.value = newVal || null;
+    paginationConfig.current = 1;
+    fetchTestCases();
+  }
 });
 
 // 暴露给父组件的方法
@@ -525,10 +547,9 @@ defineExpose({
   min-height: 0; /* Allow shrinking for nested flex container */
   max-height: calc(100% - 90px); /* 增加留给分页器的空间 */
 }
-.notes-cell {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+
+.text-gray {
+  color: #86909c;
 }
 
 :deep(.test-case-table .arco-table-td) {
@@ -549,6 +570,17 @@ defineExpose({
   flex: 1;
   overflow-y: auto !important;
   min-height: 0;
+  /* 增加底部内边距，防止最后一行阴影被遮挡 */
+  padding-bottom: 30px;
+}
+
+/* 给最后一行数据添加明显的底部阴影效果 */
+:deep(.test-case-table .arco-table-body tr:last-child td) {
+  border-bottom: none !important;
+  box-shadow: 0 15px 30px -5px rgba(0, 0, 0, 0.2) !important;
+  position: relative;
+  z-index: 9;
+  background-color: #fff;
 }
 
 :deep(.test-case-table .arco-pagination) {
@@ -563,6 +595,7 @@ defineExpose({
   bottom: 0;
   background-color: #fff;
   z-index: 1;
+  box-shadow: 0 -4px 10px rgba(0, 0, 0, 0.05); /* 给分页器添加顶部阴影，增强层次感 */
 }
 
 /* 确保操作列按钮不会溢出 */

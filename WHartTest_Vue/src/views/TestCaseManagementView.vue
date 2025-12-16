@@ -16,12 +16,14 @@
           v-if="viewMode === 'list'"
           :current-project-id="currentProjectId"
           :selected-module-id="selectedModuleId"
+          :module-tree="moduleTreeForForm"
           @add-test-case="showAddTestCaseForm"
           @generate-test-cases="showGenerateCasesModal"
           @edit-test-case="showEditTestCaseForm"
           @view-test-case="showViewTestCaseDetail"
           @execute-test-case="handleExecuteTestCase"
           @test-case-deleted="handleTestCaseDeleted"
+          @module-filter-change="handleModuleSelected"
           ref="testCaseListRef"
         />
 
@@ -55,6 +57,12 @@
       :test-case-module-tree="moduleTreeForForm"
       @submit="handleGenerateCasesSubmit"
     />
+    
+    <ExecuteTestCaseModal
+      v-model:visible="isExecuteModalVisible"
+      :test-case="pendingExecuteTestCase"
+      @confirm="handleExecuteConfirm"
+    />
   </div>
 </template>
 
@@ -73,6 +81,7 @@ import TestCaseList from '@/components/testcase/TestCaseList.vue';
 import TestCaseForm from '@/components/testcase/TestCaseForm.vue';
 import TestCaseDetail from '@/components/testcase/TestCaseDetail.vue';
 import GenerateCasesModal from '@/components/testcase/GenerateCasesModal.vue';
+import ExecuteTestCaseModal from '@/components/testcase/ExecuteTestCaseModal.vue';
 import {
   sendChatMessageStream
 } from '@/features/langgraph/services/chatService';
@@ -87,6 +96,8 @@ const selectedModuleId = ref<number | null>(null);
 const currentEditingTestCaseId = ref<number | null>(null);
 const currentViewingTestCaseId = ref<number | null>(null);
 const isGenerateCasesModalVisible = ref(false);
+const isExecuteModalVisible = ref(false);
+const pendingExecuteTestCase = ref<TestCase | null>(null);
 
 const modulePanelRef = ref<InstanceType<typeof ModuleManagementPanel> | null>(null);
 const testCaseListRef = ref<InstanceType<typeof TestCaseList> | null>(null);
@@ -106,6 +117,20 @@ const startAutomationTask = (
     requestData,
     (sessionId) => {
       localStorage.setItem('langgraph_session_id', sessionId);
+
+      // 保存提示词ID，使LangGraphChatView能恢复选中状态
+      if (requestData.prompt_id) {
+        localStorage.setItem('wharttest_selected_prompt_id', String(requestData.prompt_id));
+      }
+
+      // 保存知识库设置，使LangGraphChatView能恢复选中状态
+      const knowledgeSettings = {
+        useKnowledgeBase: requestData.use_knowledge_base || false,
+        selectedKnowledgeBaseId: requestData.knowledge_base_id || null,
+        similarityThreshold: 0.3, // 默认值
+        topK: 5 // 默认值
+      };
+      localStorage.setItem('langgraph_knowledge_settings', JSON.stringify(knowledgeSettings));
 
       const notificationReturn = Notification.info({
         title: notificationTitle,
@@ -293,6 +318,17 @@ const handleExecuteTestCase = (testCase: TestCase) => {
     Message.error('缺少有效的项目ID');
     return;
   }
+  
+  // 保存待执行的用例并显示确认弹窗
+  pendingExecuteTestCase.value = testCase;
+  isExecuteModalVisible.value = true;
+};
+
+const handleExecuteConfirm = (options: { generatePlaywrightScript: boolean }) => {
+  const testCase = pendingExecuteTestCase.value;
+  if (!testCase || !currentProjectId.value) {
+    return;
+  }
 
   const moduleInfo = testCase.module_detail
     ? testCase.module_detail
@@ -304,7 +340,7 @@ const handleExecuteTestCase = (testCase: TestCase) => {
 请调用MCP工具完成以下任务：
 1. 读取该测试用例所属项目（ID：${currentProjectId.value}）及模块，定位完整的测试用例定义。
 2. 调用工具逐步执行测试用例，并验证每一步的断言。
-3. 每一步执行后截图，并将截图上传回该测试用例。
+3. 每一步执行后截图，并将截图立马上传用例，禁止执行完，再重新执行上传。
 4. 执行结束后告知用户本次测试是否通过，并总结关键截图链接。
 
 附加信息：
@@ -318,15 +354,24 @@ const handleExecuteTestCase = (testCase: TestCase) => {
     message,
     project_id: String(currentProjectId.value),
     use_knowledge_base: false,
+    // Playwright 脚本生成参数
+    generate_playwright_script: options.generatePlaywrightScript,
+    test_case_id: options.generatePlaywrightScript ? testCase.id : undefined,
   };
+
+  const notificationContent = options.generatePlaywrightScript
+    ? '测试用例执行任务已在后台开始处理，完成后将自动生成 Playwright 脚本。'
+    : '测试用例执行任务已在后台开始处理。';
 
   startAutomationTask(
     requestData,
     '执行已开始',
-    '测试用例执行任务已在后台开始处理。',
+    notificationContent,
     'exec-case',
     '点此查看执行进度'
   );
+  
+  pendingExecuteTestCase.value = null;
 };
 
 watch(currentProjectId, (newVal) => {

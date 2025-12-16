@@ -2,6 +2,72 @@
 
 本指南将引导您完成 WHartTest 后端服务的生产环境部署。系统已改为使用API方式调用嵌入模型，无需本地下载模型文件。
 
+## 📊 数据库配置
+
+系统支持两种数据库：
+- **PostgreSQL**（默认）：生产环境推荐，支持高并发
+- **SQLite**：适合本地开发和小规模部署
+
+### 使用 PostgreSQL（默认）
+
+1. **安装 PostgreSQL**
+```bash
+# Ubuntu/Debian
+sudo apt install postgresql postgresql-contrib
+
+# 启动服务
+sudo systemctl start postgresql
+sudo systemctl enable postgresql
+```
+
+2. **创建数据库和用户**
+```bash
+# 切换到 postgres 用户
+sudo -u postgres psql
+
+# 在 PostgreSQL 中执行
+CREATE DATABASE wharttest;
+CREATE USER wharttest_user WITH PASSWORD 'your_secure_password';
+GRANT ALL PRIVILEGES ON DATABASE wharttest TO wharttest_user;
+\q
+```
+
+3. **配置环境变量**
+```bash
+# 设置数据库类型为 PostgreSQL
+export DATABASE_TYPE=postgres
+export POSTGRES_HOST=localhost
+export POSTGRES_PORT=5432
+export POSTGRES_DB=wharttest
+export POSTGRES_USER=wharttest_user
+export POSTGRES_PASSWORD=your_secure_password
+```
+
+4. **执行数据库迁移**
+```bash
+python manage.py migrate
+```
+
+### 使用 SQLite（本地开发）
+
+如需使用 SQLite，设置环境变量：
+```bash
+# 切换到 SQLite
+export DATABASE_TYPE=sqlite
+# SQLite 数据库文件位置
+export DATABASE_PATH=/path/to/db.sqlite3
+```
+
+### Docker 部署时切换数据库
+
+Docker 默认使用 PostgreSQL。如需使用 SQLite，编辑 `.env` 文件：
+```yaml
+# 使用 SQLite（本地开发）
+DATABASE_TYPE=sqlite
+```
+
+---
+
 ### 🛠️ 后端部署 (以 Ubuntu 为例)
 
 
@@ -19,8 +85,8 @@ source $HOME/.cargo/env
 
 #### 2. 克隆项目
 ```bash
-git clone <your-repo-url>
-cd WHartTest_Django
+git clone https://github.com/MGdaasLab/WHartTest.git
+cd WHartTest/WHartTest_Django
 ```
 
 #### 3. 创建并激活虚拟环境
@@ -36,7 +102,7 @@ source .venv/bin/activate
 #### 4. 安装依赖
 使用 `uv` 高效地安装项目依赖。
 ```bash
-uv pip sync -r requirements.txt
+uv pip install -r requirements.txt
 ```
 
 #### 5. 数据库迁移和超级用户创建
@@ -53,10 +119,10 @@ uv run WHartTest_Django/manage.py createsuperuser
 
 #### 6. 启动服务
 ```bash
-# 使用 Gunicorn 启动 Django 应用
-gunicorn wharttest_django.wsgi:application --bind 0.0.0.0:8000 --workers 4
-# Windows启动Django服务
-uv run python WHartTest_Django/manage.py runserver 0.0.0.0:8000
+# 使用 Uvicorn 启动 Django 应用（支持 WebSocket）
+uvicorn wharttest_django.asgi:application --host 0.0.0.0 --port 8000 --workers 4
+# Windows 开发环境启动
+uv run uvicorn wharttest_django.asgi:application --reload --host 127.0.0.1 --port 8000
 ```
 
 #### 6. 收集静态文件
@@ -65,19 +131,19 @@ uv run python WHartTest_Django/manage.py runserver 0.0.0.0:8000
 python manage.py collectstatic --noinput
 ```
 
-#### 7. 使用 Gunicorn 启动服务
+#### 7. 使用 Uvicorn 启动服务
 ```bash
-# 安装 gunicorn
-pip install gunicorn
+# 安装 uvicorn
+pip install uvicorn
 
-# 启动服务
-gunicorn wharttest_django.wsgi:application \
-  --bind 0.0.0.0:8000 \
+# 启动服务（支持 WebSocket）
+uvicorn wharttest_django.asgi:application \
+  --host 0.0.0.0 \
+  --port 8000 \
   --workers 4 \
-  --timeout 120 \
-  --preload
+  --timeout-keep-alive 120
 ```
-*   `--preload` 会在启动时预加载模型，减少首次请求的延迟。
+*   项目使用 Django Channels 实现 WebSocket，必须使用 ASGI 服务器。
 
 
 ## 🔍 部署验证

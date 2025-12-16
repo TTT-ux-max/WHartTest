@@ -1,7 +1,26 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
-from .models import KnowledgeBase, Document, DocumentChunk, QueryLog
+from .models import KnowledgeBase, Document, DocumentChunk, QueryLog, KnowledgeGlobalConfig
 from projects.models import Project
+
+
+class KnowledgeGlobalConfigSerializer(serializers.ModelSerializer):
+    """知识库全局配置序列化器"""
+    updated_by_name = serializers.CharField(source='updated_by.username', read_only=True)
+    embedding_service_display = serializers.CharField(source='get_embedding_service_display', read_only=True)
+
+    class Meta:
+        model = KnowledgeGlobalConfig
+        fields = [
+            'embedding_service', 'embedding_service_display',
+            'api_base_url', 'api_key', 'model_name',
+            'chunk_size', 'chunk_overlap',
+            'updated_at', 'updated_by', 'updated_by_name'
+        ]
+        read_only_fields = ['updated_at', 'updated_by']
+        extra_kwargs = {
+            'api_key': {'write_only': False}  # API Key可读可写，但前端应做脱敏处理
+        }
 
 
 class KnowledgeBaseSerializer(serializers.ModelSerializer):
@@ -10,21 +29,12 @@ class KnowledgeBaseSerializer(serializers.ModelSerializer):
     project_name = serializers.CharField(source='project.name', read_only=True)
     document_count = serializers.SerializerMethodField()
     chunk_count = serializers.SerializerMethodField()
-    # 显式定义 api_base_url，移除 URL 格式验证
-    api_base_url = serializers.CharField(
-        max_length=500, 
-        required=False, 
-        allow_blank=True, 
-        allow_null=True,
-        help_text='API服务的基础URL，支持任意格式如 http://localhost:11434'
-    )
 
     class Meta:
         model = KnowledgeBase
         fields = [
             'id', 'name', 'description', 'project', 'project_name',
             'creator', 'creator_name', 'is_active',
-            'embedding_service', 'api_base_url', 'api_key', 'model_name', 
             'chunk_size', 'chunk_overlap',
             'document_count', 'chunk_count', 'created_at', 'updated_at'
         ]

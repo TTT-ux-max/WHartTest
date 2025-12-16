@@ -15,18 +15,20 @@ class Command(BaseCommand):
 
         # 检查管理员是否已存在
         admin_user = User.objects.filter(username=admin_username).first()
+        admin_created = False
         
         if admin_user:
             self.stdout.write(
                 self.style.WARNING(f'管理员账号 "{admin_username}" 已存在，跳过创建')
             )
         else:
-            # 创建管理员账号
+            # 创建管理员账号（注意：信号会自动初始化提示词）
             admin_user = User.objects.create_superuser(
                 username=admin_username,
                 email=admin_email,
                 password=admin_password
             )
+            admin_created = True
             
             self.stdout.write(
                 self.style.SUCCESS(
@@ -36,6 +38,9 @@ class Command(BaseCommand):
                     f'  密码: {admin_password}'
                 )
             )
+        
+        # 为管理员初始化提示词（无论是新建还是已存在）
+        self._initialize_admin_prompts(admin_user, admin_created)
         
         # 创建默认API Key（用于MCP服务）
         from api_keys.models import APIKey
@@ -168,6 +173,9 @@ class Command(BaseCommand):
                 )
             )
         
+        # 初始化知识库全局配置（使用Ollama默认配置）
+        self._initialize_knowledge_global_config(admin_user)
+        
         self.stdout.write(
             self.style.SUCCESS(
                 '\n========================================\n'
@@ -182,3 +190,76 @@ class Command(BaseCommand):
                 '========================================\n'
             )
         )
+    
+    def _initialize_admin_prompts(self, admin_user, admin_created):
+        """为管理员初始化默认提示词"""
+        try:
+            from prompts.services import initialize_user_prompts
+            
+            if admin_created:
+                # 新创建的用户，信号已经自动初始化了提示词
+                self.stdout.write(
+                    self.style.SUCCESS('✅ 管理员提示词已通过信号自动初始化')
+                )
+            else:
+                # 已存在的用户，检查并补充缺失的提示词
+                result = initialize_user_prompts(admin_user, force_update=False)
+                
+                if result['summary']['created_count'] > 0:
+                    self.stdout.write(
+                        self.style.SUCCESS(
+                            f'✅ 管理员提示词初始化完成:\n'
+                            f'  新建: {result["summary"]["created_count"]} 个\n'
+                            f'  跳过: {result["summary"]["skipped_count"]} 个'
+                        )
+                    )
+                else:
+                    self.stdout.write(
+                        self.style.WARNING('管理员提示词已存在，跳过初始化')
+                    )
+                    
+        except Exception as e:
+            self.stdout.write(
+                self.style.ERROR(f'❌ 初始化管理员提示词失败: {e}')
+            )
+    
+    def _initialize_knowledge_global_config(self, admin_user):
+        """初始化知识库全局配置（使用Ollama默认配置）"""
+        try:
+            from knowledge.models import KnowledgeGlobalConfig
+            
+            # 获取或创建配置（单例模式）
+            config = KnowledgeGlobalConfig.get_config()
+            
+            # 检查是否是默认配置（通过检查updated_by是否为空）
+            if config.updated_by is None:
+                # 设置Ollama默认配置（Docker Compose服务名为bge-m3）
+                config.embedding_service = 'ollama'
+                config.api_base_url = os.environ.get('OLLAMA_API_BASE_URL', 'http://bge-m3:11434')
+                config.api_key = ''  # Ollama不需要API Key
+                config.model_name = os.environ.get('OLLAMA_EMBEDDING_MODEL', 'bge-m3')
+                config.chunk_size = 1000
+                config.chunk_overlap = 200
+                config.updated_by = admin_user
+                config.save()
+                
+                self.stdout.write(
+                    self.style.SUCCESS(
+                        f'\n成功初始化知识库全局配置:\n'
+                        f'  嵌入服务: Ollama\n'
+                        f'  API地址: {config.api_base_url}\n'
+                        f'  嵌入模型: {config.model_name}\n'
+                        f'  分块大小: {config.chunk_size}\n'
+                        f'  分块重叠: {config.chunk_overlap}\n'
+                        f'  ℹ️  可在【知识库管理】>【知识库配置】中修改'
+                    )
+                )
+            else:
+                self.stdout.write(
+                    self.style.WARNING('知识库全局配置已存在，跳过初始化')
+                )
+                
+        except Exception as e:
+            self.stdout.write(
+                self.style.ERROR(f'❌ 初始化知识库全局配置失败: {e}')
+            )

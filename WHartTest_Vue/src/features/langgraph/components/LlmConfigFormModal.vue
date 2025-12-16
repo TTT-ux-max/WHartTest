@@ -6,7 +6,7 @@
     @cancel="handleCancel"
     :confirm-loading="formLoading"
     :mask-closable="false"
-    width="600px"
+    width="700px"
   >
     <a-form
       ref="formRef"
@@ -15,122 +15,140 @@
       layout="vertical"
       @submit="handleSubmit"
     >
-      <a-form-item field="config_name" label="配置名称" required>
-        <a-input v-model="formData.config_name" placeholder="请输入配置名称" />
-      </a-form-item>
-      <a-form-item field="provider" label="供应商" required>
-        <a-select 
-          v-model="formData.provider" 
-          placeholder="请选择供应商"
-          :loading="loadingProviders"
-        >
-          <a-option 
-            v-for="option in providerOptions" 
-            :key="option.value" 
-            :value="option.value"
+      <a-row :gutter="24">
+        <!-- 第一行：配置名称 (全宽) -->
+        <a-col :span="24">
+          <a-form-item field="config_name" label="配置名称" required>
+            <a-input v-model="formData.config_name" placeholder="例如: GPT-4 生产环境" />
+          </a-form-item>
+        </a-col>
+
+        <!-- 第二行：模型名称 (全宽 + 刷新按钮内联) -->
+        <a-col :span="24">
+          <a-form-item field="name" label="模型名称" required>
+            <div class="model-input-wrapper">
+              <a-auto-complete
+                v-model="formData.name"
+                :data="modelOptions"
+                :loading="loadingModels"
+                placeholder="输入或选择模型名称 (如: gpt-4-turbo)"
+                allow-clear
+                @focus="handleModelInputFocus"
+                class="model-input"
+              />
+              <a-tooltip content="从 API 刷新模型列表">
+                <a-button
+                  type="secondary"
+                  :loading="loadingModels"
+                  @click="fetchAvailableModels"
+                >
+                  <template #icon><icon-refresh /></template>
+                </a-button>
+              </a-tooltip>
+            </div>
+          </a-form-item>
+        </a-col>
+
+        <!-- 第三行：API URL + API Key -->
+        <a-col :span="12">
+          <a-form-item field="api_url" label="API URL" required>
+            <a-input v-model="formData.api_url" placeholder="https://api.openai.com/v1" />
+          </a-form-item>
+        </a-col>
+        <a-col :span="12">
+          <a-form-item field="api_key" label="API Key" :required="!isEditing">
+            <a-input-password
+              v-model="formData.api_key"
+              :placeholder="isEditing ? '留空不修改' : '请输入 API Key'"
+            />
+          </a-form-item>
+        </a-col>
+
+        <!-- 提示信息 + 测试按钮 -->
+        <a-col :span="24" class="test-button-row">
+          <span class="api-hint">仅支持 OpenAI 兼容格式的 API</span>
+          <a-button 
+            type="outline"
+            status="success"
+            size="small"
+            :loading="testingModel"
+            @click="testLlmModel"
           >
-            {{ option.label }}
-          </a-option>
-        </a-select>
-      </a-form-item>
-      <a-form-item field="name" label="模型名称" required>
-        <a-auto-complete
-          v-model="formData.name"
-          :data="modelOptions"
-          :loading="loadingModels"
-          placeholder="请输入或选择模型名称"
-          allow-clear
-          @focus="handleModelInputFocus"
-        >
-          <template #suffix>
-            <a-button
-              type="text"
-              size="mini"
-              :loading="loadingModels"
-              @click="fetchAvailableModels"
-            >
-              <icon-refresh v-if="!loadingModels" />
-            </a-button>
-          </template>
-        </a-auto-complete>
-        <template #extra>
-          <div class="text-xs text-gray-500">
-            可直接输入或点击刷新按钮从 API 获取模型列表
-          </div>
-        </template>
-      </a-form-item>
-      <a-form-item field="api_url" label="API URL" required>
-        <a-input v-model="formData.api_url" placeholder="例如: https://api.openai.com/v1" />
-      </a-form-item>
-      <a-form-item field="api_key" label="API Key" :required="!isEditing">
-        <a-input-password
-          v-model="formData.api_key"
-          :placeholder="isEditing ? '如需修改请输入新的 API Key' : '请输入 API Key'"
-        />
-        <template #extra v-if="isEditing">
-          <div class="text-xs text-gray-500">留空表示不修改 API Key。</div>
-        </template>
-      </a-form-item>
-      <a-form-item>
-        <a-button 
-          @click="testLlmModel"
-          :loading="testingModel"
-          type="outline"
-        >
-          <template #icon><icon-refresh /></template>
-          测试模型
-        </a-button>
-      </a-form-item>
-      <a-form-item field="system_prompt" label="系统提示词">
-        <a-textarea
-          v-model="formData.system_prompt"
-          placeholder="请输入系统提示词（可选）"
-          :rows="4"
-          :max-length="2000"
-          show-word-limit
-        />
-        <template #extra>
-          <div class="text-xs text-gray-500">用于指导AI助手的行为和回答风格。</div>
-        </template>
-      </a-form-item>
-      <a-form-item field="supports_vision" label="支持图片输入">
-        <a-switch v-model="formData.supports_vision" />
-        <template #extra>
-          <div class="text-xs text-gray-500">模型是否支持图片/多模态输入（如GPT-4V、Qwen-VL、Gemini Vision等）。</div>
-        </template>
-      </a-form-item>
-      <a-form-item field="is_active" label="激活状态">
-        <a-switch v-model="formData.is_active" />
-        <template #extra>
-          <div class="text-xs text-gray-500">如果设为 true，其他已激活的配置会自动设为 false。</div>
-        </template>
-      </a-form-item>
+            <template #icon><icon-thunderbolt /></template>
+            测试连接
+          </a-button>
+        </a-col>
+
+        <!-- 第四行：系统提示词 (全宽) -->
+        <a-col :span="24">
+          <a-form-item field="system_prompt" label="系统提示词">
+            <a-textarea
+              v-model="formData.system_prompt"
+              placeholder="设置模型的默认 System Prompt（可选）"
+              :auto-size="{ minRows: 3, maxRows: 6 }"
+              :max-length="2000"
+              show-word-limit
+            />
+          </a-form-item>
+        </a-col>
+
+        <!-- 第五行：开关区域 + 上下文限制 -->
+        <a-col :span="8">
+          <a-form-item field="context_limit" label="上下文限制">
+            <a-input-number
+              v-model="formData.context_limit"
+              :min="1000"
+              :max="2000000"
+              :step="1000"
+              placeholder="128000"
+            />
+          </a-form-item>
+        </a-col>
+        <a-col :span="8">
+          <a-form-item field="supports_vision" label="图片">
+            <a-space>
+              <a-switch v-model="formData.supports_vision" />
+              <span class="switch-desc">Vision</span>
+            </a-space>
+          </a-form-item>
+        </a-col>
+        <a-col :span="8">
+          <a-form-item field="is_active" label="配置状态">
+            <a-space>
+              <a-switch v-model="formData.is_active" checked-color="#00b42a" />
+              <span class="switch-desc">已激活</span>
+            </a-space>
+          </a-form-item>
+        </a-col>
+      </a-row>
     </a-form>
   </a-modal>
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed, nextTick, onMounted } from 'vue';
+import { ref, watch, computed, nextTick } from 'vue';
 import {
   Modal as AModal,
   Form as AForm,
   FormItem as AFormItem,
   Input as AInput,
   InputPassword as AInputPassword,
+  InputNumber as AInputNumber,
   Textarea as ATextarea,
   Switch as ASwitch,
-  Select as ASelect,
-  Option as AOption,
   AutoComplete as AAutoComplete,
   Button as AButton,
+  Row as ARow,
+  Col as ACol,
+  Space as ASpace,
+  Tooltip as ATooltip,
   Message,
   type FormInstance,
   type FieldRule,
 } from '@arco-design/web-vue';
-import { IconRefresh } from '@arco-design/web-vue/es/icon';
+import { IconRefresh, IconThunderbolt } from '@arco-design/web-vue/es/icon';
 import axios from 'axios';
 import type { LlmConfig, CreateLlmConfigRequest, PartialUpdateLlmConfigRequest } from '@/features/langgraph/types/llmConfig';
-import { getProviders, type ProviderOption } from '@/features/langgraph/services/llmConfigService';
 
 interface Props {
   visible: boolean;
@@ -150,19 +168,18 @@ const emit = defineEmits<{
 }>();
 
 const formRef = ref<FormInstance | null>(null);
-const providerOptions = ref<ProviderOption[]>([]);
-const loadingProviders = ref(false);
 const modelOptions = ref<string[]>([]);
 const loadingModels = ref(false);
 const testingModel = ref(false);
 const defaultFormData: CreateLlmConfigRequest = {
   config_name: '',
-  provider: '',
+  provider: 'openai_compatible',
   name: '',
   api_url: '',
   api_key: '',
   system_prompt: '',
   supports_vision: false,
+  context_limit: 128000,
   is_active: false,
 };
 const formData = ref<CreateLlmConfigRequest>({ ...defaultFormData });
@@ -171,27 +188,24 @@ const isEditing = computed(() => !!props.configData?.id);
 
 const formRules: Record<string, FieldRule[]> = {
   config_name: [{ required: true, message: '配置名称不能为空' }],
-  provider: [{ required: true, message: '供应商不能为空' }],
   name: [{ required: true, message: '模型名称不能为空' }],
   api_url: [
     { required: true, message: 'API URL 不能为空' },
     { type: 'url', message: '请输入有效的 URL' },
   ],
   api_key: [
-    // API Key 在创建时必填，编辑时可选
     {
       required: !isEditing.value,
       message: 'API Key 不能为空',
-      validator: (value, cb) => {
+      validator: (value: string | undefined, cb: (error?: string) => void) => {
         if (!isEditing.value && !value) {
           return cb('API Key 不能为空');
         }
         if (value && value.length < 10 && !isEditing.value) {
-            // 仅在创建时或编辑时输入了新值才校验长度
-            return cb('API key 必须至少 10 个字符长。');
+          return cb('API key 必须至少 10 个字符长。');
         }
         if (isEditing.value && value && value.length > 0 && value.length < 10) {
-             return cb('API key 必须至少 10 个字符长。');
+          return cb('API key 必须至少 10 个字符长。');
         }
         return cb();
       }
@@ -212,8 +226,9 @@ watch(
           name: props.configData.name,
           api_url: props.configData.api_url,
           api_key: '', // 编辑时不显示旧 Key，留空表示不修改
-          system_prompt: props.configData.system_prompt || '', // 填充系统提示词
-          supports_vision: props.configData.supports_vision || false, // 填充多模态支持
+          system_prompt: props.configData.system_prompt || '',
+          supports_vision: props.configData.supports_vision || false,
+          context_limit: props.configData.context_limit || 128000,
           is_active: props.configData.is_active,
         };
       } else {
@@ -257,6 +272,9 @@ const handleSubmit = async () => {
     if (formData.value.supports_vision !== undefined) { // 包含多模态支持
       partialData.supports_vision = formData.value.supports_vision;
     }
+    if (formData.value.context_limit !== undefined) { // 包含上下文限制
+      partialData.context_limit = formData.value.context_limit;
+    }
     submitData = partialData;
     emit('submit', submitData, props.configData.id);
   } else {
@@ -274,30 +292,7 @@ const handleCancel = () => {
   emit('cancel');
 };
 
-const loadProviders = async () => {
-  loadingProviders.value = true;
-  try {
-    const response = await getProviders();
-    if (response.status === 'success' && response.data) {
-      // 对供应商列表排序,将 OpenAI Compatible 放在第一位
-      const providers = response.data.choices;
-      const compatibleIndex = providers.findIndex(p => p.value === 'openai_compatible');
-      
-      if (compatibleIndex > -1) {
-        const [compatible] = providers.splice(compatibleIndex, 1);
-        providerOptions.value = [compatible, ...providers];
-      } else {
-        providerOptions.value = providers;
-      }
-    }
-  } catch (error) {
-    console.error('Failed to load providers:', error);
-  } finally {
-    loadingProviders.value = false;
-  }
-};
-
-// 从 API 获取可用模型列表
+// 从 API 获取可用模型列表（OpenAI 兼容格式）
 const fetchAvailableModels = async () => {
   if (!formData.value.api_url) {
     Message.warning('请先填写 API URL');
@@ -310,20 +305,18 @@ const fetchAvailableModels = async () => {
   }
 
   loadingModels.value = true;
+  
   try {
-    // 构造 models API 端点
-    const apiUrl = formData.value.api_url.replace(/\/$/, ''); // 移除末尾斜杠
+    const apiUrl = formData.value.api_url.replace(/\/$/, '');
     const modelsEndpoint = `${apiUrl}/models`;
-
     const response = await axios.get(modelsEndpoint, {
       headers: {
         'Authorization': `Bearer ${formData.value.api_key}`,
         'Content-Type': 'application/json',
       },
-      timeout: 10000, // 10秒超时
+      timeout: 10000,
     });
 
-    // OpenAI API 格式: { data: [{ id: 'model-name' }] }
     if (response.data && response.data.data) {
       const models = response.data.data.map((model: any) => model.id);
       modelOptions.value = models;
@@ -349,9 +342,8 @@ const fetchAvailableModels = async () => {
   }
 };
 
-// 测试 LLM 模型真实可用性
+// 测试 LLM 模型真实可用性（OpenAI 兼容格式）
 const testLlmModel = async () => {
-  // 验证必要字段
   if (!formData.value.api_url) {
     Message.warning('请先填写 API URL');
     return;
@@ -366,12 +358,10 @@ const testLlmModel = async () => {
   }
 
   testingModel.value = true;
+  
   try {
-    // 构造 chat completions API 端点
     const apiUrl = formData.value.api_url.replace(/\/$/, '');
     const chatEndpoint = `${apiUrl}/chat/completions`;
-
-    // 发送测试请求
     const response = await axios.post(chatEndpoint, {
       model: formData.value.name,
       messages: [
@@ -383,10 +373,9 @@ const testLlmModel = async () => {
         'Authorization': `Bearer ${formData.value.api_key}`,
         'Content-Type': 'application/json',
       },
-      timeout: 30000, // 30秒超时
+      timeout: 30000,
     });
 
-    // 验证返回数据包含有效响应
     if (response.data && response.data.choices && response.data.choices.length > 0) {
       const content = response.data.choices[0].message?.content;
       if (content !== undefined) {
@@ -400,6 +389,7 @@ const testLlmModel = async () => {
   } catch (error: any) {
     console.error('模型测试失败:', error);
     const errorMsg = error.response?.data?.error?.message 
+      || error.response?.data?.message
       || error.response?.statusText 
       || error.message 
       || '模型测试失败';
@@ -411,17 +401,40 @@ const testLlmModel = async () => {
 
 // 处理模型输入框聚焦
 const handleModelInputFocus = () => {
-  // 如果有 API URL 和 API Key,且模型列表为空,自动获取
   if (formData.value.api_url && formData.value.api_key && modelOptions.value.length === 0) {
     fetchAvailableModels();
   }
 };
-
-onMounted(() => {
-  loadProviders();
-});
 </script>
 
 <style scoped>
-/* 可以在这里添加特定于此组件的样式 */
+.model-input-wrapper {
+  display: flex;
+  width: 100%;
+  gap: 8px;
+  align-items: center;
+}
+
+.model-input {
+  flex: 1;
+}
+
+.test-button-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  margin-top: -8px;
+}
+
+.api-hint {
+  font-size: 12px;
+  color: var(--color-text-3);
+}
+
+.switch-desc {
+  font-size: 13px;
+  color: var(--color-text-3);
+  cursor: pointer;
+}
 </style>

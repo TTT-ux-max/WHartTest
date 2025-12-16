@@ -69,6 +69,7 @@ else:
 # Application definition
 
 INSTALLED_APPS = [
+    'daphne',  # Channels ASGI server，必须放在最前面
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -78,6 +79,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'django_filters',  # 添加 django-filter
+    'channels',  # Django Channels for WebSocket
     'accounts', # 或者 'accounts.apps.AccountsConfig'
     'projects', # 项目管理应用
     'testcases', # 用例管理应用
@@ -91,6 +93,16 @@ INSTALLED_APPS = [
     'requirements', # 需求评审管理应用
     'orchestrator_integration', # 智能编排集成应用
 ]
+
+# ASGI 配置（用于 Channels WebSocket）
+ASGI_APPLICATION = 'wharttest_django.asgi.application'
+
+# Channels Layer 配置（使用内存后端，生产环境建议使用 Redis）
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer'
+    }
+}
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -134,24 +146,50 @@ WSGI_APPLICATION = 'wharttest_django.wsgi.application'
 #     }
 # else:
 
-# 支持通过环境变量配置数据库路径，用于 Docker 部署
-DATABASE_PATH = os.environ.get('DATABASE_PATH')
-if DATABASE_PATH:
-    # 使用环境变量指定的路径（Docker部署）
+# 数据库配置
+# 支持通过环境变量配置数据库类型和连接参数
+# DATABASE_TYPE: sqlite (默认) 或 postgres
+# DATABASE_PATH: SQLite 文件路径（仅 sqlite 模式）
+# POSTGRES_*: PostgreSQL 连接参数（仅 postgres 模式）
+
+DATABASE_TYPE = os.environ.get('DATABASE_TYPE', 'postgres')
+
+if DATABASE_TYPE == 'postgres':
+    # PostgreSQL 配置
     DATABASES = {
         'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': DATABASE_PATH,
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('POSTGRES_DB', 'wharttest'),
+            'USER': os.environ.get('POSTGRES_USER', 'postgres'),
+            'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'postgres'),
+            'HOST': os.environ.get('POSTGRES_HOST', '127.0.0.1'),
+            'PORT': os.environ.get('POSTGRES_PORT', '8919'),
+            'OPTIONS': {
+                'connect_timeout': 5,
+            },
+            'CONN_MAX_AGE': 600,  # 连接保持 600 秒（10分钟），避免每次请求重新建立连接
+            'CONN_HEALTH_CHECKS': True,  # Django 4.1+ 连接健康检查
         }
     }
 else:
-    # 使用默认路径（本地开发）
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
+    # SQLite 配置（默认，用于本地开发）
+    DATABASE_PATH = os.environ.get('DATABASE_PATH')
+    if DATABASE_PATH:
+        # 使用环境变量指定的路径（Docker部署）
+        DATABASES = {
+            'default': {
+                'ENGINE': 'django.db.backends.sqlite3',
+                'NAME': DATABASE_PATH,
+            }
         }
-    }
+    else:
+        # 使用默认路径（本地开发）
+        DATABASES = {
+            'default': {
+                'ENGINE': 'django.db.backends.sqlite3',
+                'NAME': BASE_DIR / 'db.sqlite3',
+            }
+        }
 
 
 # Password validation
@@ -352,10 +390,10 @@ LOGGING = {
             'class': 'logging.StreamHandler',
             'formatter': 'simple',
         },
-        # 应用总日志文件 - 按日期轮转
+        # 应用总日志文件 - 使用安全的时间轮转处理器
         'app_file': {
             'level': 'INFO',
-            'class': 'logging.handlers.TimedRotatingFileHandler',
+            'class': 'wharttest_django.safe_log_handler.SafeTimedRotatingFileHandler',
             'filename': str(LOGS_DIR / 'app.log'),
             'when': 'midnight',
             'interval': 1,
@@ -366,7 +404,7 @@ LOGGING = {
         # 错误日志文件 - 只记录ERROR及以上
         'error_file': {
             'level': 'ERROR',
-            'class': 'logging.handlers.TimedRotatingFileHandler',
+            'class': 'wharttest_django.safe_log_handler.SafeTimedRotatingFileHandler',
             'filename': str(LOGS_DIR / 'error.log'),
             'when': 'midnight',
             'interval': 1,
@@ -377,7 +415,7 @@ LOGGING = {
         # Requirements应用专用日志
         'requirements_file': {
             'level': 'DEBUG',
-            'class': 'logging.handlers.TimedRotatingFileHandler',
+            'class': 'wharttest_django.safe_log_handler.SafeTimedRotatingFileHandler',
             'filename': str(LOGS_DIR / 'requirements.log'),
             'when': 'midnight',
             'interval': 1,
@@ -388,7 +426,7 @@ LOGGING = {
         # Celery任务日志
         'celery_file': {
             'level': 'INFO',
-            'class': 'logging.handlers.TimedRotatingFileHandler',
+            'class': 'wharttest_django.safe_log_handler.SafeTimedRotatingFileHandler',
             'filename': str(LOGS_DIR / 'celery.log'),
             'when': 'midnight',
             'interval': 1,
@@ -455,6 +493,12 @@ LOGGING = {
             'propagate': False,
         },
         'testcases.serializers': {
+            'handlers': ['console', 'app_file', 'error_file'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+        # Orchestrator集成应用日志(Agent Loop压缩调试)
+        'orchestrator_integration': {
             'handlers': ['console', 'app_file', 'error_file'],
             'level': 'DEBUG',
             'propagate': False,

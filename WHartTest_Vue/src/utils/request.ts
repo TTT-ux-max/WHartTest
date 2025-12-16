@@ -1,7 +1,6 @@
 import axios from 'axios';
 import type { AxiosResponse, InternalAxiosRequestConfig } from 'axios';
 import { useAuthStore } from '@/store/authStore';
-import { isTokenInvalidError, handleAuthError } from '@/utils/authErrorHandler';
 
 // 定义我们需要的请求配置类型
 type RequestConfig = {
@@ -149,6 +148,26 @@ service.interceptors.response.use(
 
     // 检查是否是401错误（未授权）
     if (response && response.status === 401) {
+      // 如果是登录请求返回401，说明凭据错误，直接返回后端的错误信息，不触发token刷新逻辑
+      if (originalRequest.url?.includes('/token/') && !originalRequest.url?.includes('/token/refresh/')) {
+        const responseData = response.data;
+        let loginErrorMessage = '认证失败';
+        if (responseData) {
+          if (responseData.message) {
+            loginErrorMessage = responseData.message;
+          } else if (responseData.detail) {
+            loginErrorMessage = responseData.detail;
+          } else if (responseData.errors?.detail) {
+            loginErrorMessage = responseData.errors.detail;
+          }
+        }
+        return Promise.reject({
+          success: false,
+          status: 401,
+          error: loginErrorMessage,
+        });
+      }
+      
       // 如果是刷新token的请求失败，直接登出
       if (originalRequest.url?.includes('/token/refresh/')) {
         const authStore = useAuthStore();
@@ -182,7 +201,7 @@ service.interceptors.response.use(
 
       // 如果正在刷新token，将请求加入队列
       if (isRefreshing) {
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve, _reject) => {
           subscribeTokenRefresh((token: string) => {
             if (!originalRequest.headers) {
               originalRequest.headers = {};
@@ -279,10 +298,15 @@ service.interceptors.response.use(
           }
           break;
         case 404:
-          message = '请求的资源不存在';
+          if (!message || message === '未知错误') {
+            message = '请求的资源不存在';
+          }
           break;
         case 500:
-          message = '服务器内部错误';
+          // 优先使用后端返回的具体错误信息
+          if (!message || message === '未知错误') {
+            message = '服务器内部错误';
+          }
           break;
         default:
           // 使用从响应中解析的消息

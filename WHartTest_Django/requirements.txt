@@ -18,6 +18,12 @@ drf-spectacular==0.28.0
 # https://github.com/adamchainz/django-cors-headers/blob/main/LICENSE
 django-cors-headers==4.3.1
 
+# Django Channels WebSocket支持 - BSD许可证
+# https://github.com/django/channels/blob/main/LICENSE
+channels==4.3.2
+channels-redis==4.3.0
+daphne==4.2.1
+
 # 环境变量管理 - BSD许可证 (当前版本: 1.1.1)
 # https://github.com/theskumar/python-dotenv/blob/main/LICENSE
 python-dotenv==1.1.1
@@ -46,13 +52,10 @@ langchain==0.3.25
 # https://github.com/langchain-ai/langchain/blob/master/libs/partners/openai/LICENSE
 langchain-openai==0.3.17
 
-# LangChain Anthropic/Claude支持 - MIT许可证 (当前版本: 0.2.4)
-# https://github.com/langchain-ai/langchain/blob/master/libs/partners/anthropic/LICENSE
-langchain-anthropic==0.2.4
-
-# Anthropic API客户端 - MIT许可证 (当前版本: 0.48.0)
-# https://github.com/anthropics/anthropic-sdk-python/blob/main/LICENSE
-anthropic==0.48.0
+# LangChain Anthropic/Claude 支持（已移除 - 保留注释以便记录）
+# 如果将来需要使用 Anthropic/Claude，请取消注释以下依赖：
+# langchain-anthropic==0.2.4
+# anthropic==0.48.0
 
 # LangChain核心库 - MIT许可证 (当前版本: 0.3.60)
 # https://github.com/langchain-ai/langchain/blob/master/libs/core/LICENSE
@@ -82,6 +85,17 @@ langsmith==0.3.45
 # https://github.com/langchain-ai/langgraph/blob/main/libs/checkpoint-sqlite/LICENSE
 langgraph-checkpoint-sqlite==2.0.10
 
+# LangGraph PostgreSQL检查点 - MIT许可证
+# https://github.com/langchain-ai/langgraph/blob/main/libs/checkpoint-postgres/LICENSE
+langgraph-checkpoint-postgres==2.0.17
+
+# PostgreSQL数据库驱动 - LGPL许可证
+# psycopg2-binary: Django ORM 使用
+# psycopg[binary]: langgraph-checkpoint-postgres 使用
+# https://github.com/psycopg/psycopg2/blob/master/LICENSE
+psycopg2-binary==2.9.10
+psycopg[binary]==3.3.1
+
 # LangChain MCP适配器 - MIT许可证 (当前版本: 0.1.9)
 # https://github.com/langchain-ai/langchain-mcp-adapters/blob/main/LICENSE
 langchain-mcp-adapters==0.1.9
@@ -90,7 +104,7 @@ langchain-mcp-adapters==0.1.9
 # https://github.com/theorchard/openpyxl/blob/master/LICENCE.rst
 openpyxl==3.1.5
 
-# 知识库依赖 - ChromaDB专用
+# 知识库依赖
 # LangChain社区库 - MIT许可证 (当前版本: 0.3.24)
 # https://github.com/langchain-ai/langchain/blob/master/libs/community/LICENSE
 langchain-community==0.3.24
@@ -99,9 +113,17 @@ langchain-community==0.3.24
 # https://github.com/langchain-ai/langchain/blob/master/libs/text-splitters/LICENSE
 langchain-text-splitters==0.3.8
 
-# ChromaDB向量数据库 - Apache 2.0许可证 (当前版本: 1.0.12)
-# https://github.com/chroma-core/chroma/blob/main/LICENSE
-langchain-chroma==0.2.4
+# Qdrant向量数据库 - Apache 2.0许可证
+# https://github.com/qdrant/qdrant-client/blob/master/LICENSE
+langchain-qdrant==0.2.1
+
+# Qdrant客户端 - Apache 2.0许可证
+# https://github.com/qdrant/qdrant-client/blob/master/LICENSE
+qdrant-client==1.11.3
+
+# FastEmbed - 用于BM25稀疏向量编码（混合检索）
+# https://github.com/qdrant/fastembed/blob/main/LICENSE
+fastembed>=0.7.0,<1.0
 
 # HuggingFace嵌入模型支持（已弃用 - 会自动安装 torch 和 CUDA 依赖）
 # 注意：langchain-huggingface 依赖 sentence-transformers，会自动安装 torch（约800MB+）和 CUDA 库（约1GB+）
@@ -128,29 +150,14 @@ langchain-chroma==0.2.4
 # # https://github.com/fireworks-ai/fireworks-ai-python/blob/main/LICENSE
 # fireworks-ai==0.15.12
 
-# Google Gemini支持 - MIT许可证 (当前版本: 2.0.8)
-# https://github.com/langchain-ai/langchain/blob/master/libs/partners/google-genai/LICENSE
-langchain-google-genai==2.0.8
-
-# Google AI生成语言API - Apache 2.0许可证 (当前版本: 0.6.15)
-# https://github.com/googleapis/google-cloud-python/blob/main/LICENSE
-google-ai-generativelanguage==0.6.15
-
-# Google API核心库 - Apache 2.0许可证 (当前版本: 2.24.1)
-# https://github.com/googleapis/python-api-core/blob/main/LICENSE
-google-api-core==2.24.1
-
-# Google API客户端 - Apache 2.0许可证 (当前版本: 2.162.0)
-# https://github.com/googleapis/google-api-python-client/blob/main/LICENSE
-google-api-python-client==2.162.0
-
-# Google认证库 - Apache 2.0许可证 (当前版本: 2.38.0)
-# https://github.com/googleapis/google-auth-library-python/blob/main/LICENSE
-google-auth==2.38.0
-
-# Google生成式AI - Apache 2.0许可证 (当前版本: 0.8.4)
-# https://github.com/google/generative-ai-python/blob/main/LICENSE
-google-generativeai==0.8.4
+# Google Gemini 及相关 Google AI 依赖（已移除 - 保留注释以便记录）
+# 如果将来需要使用 Google Gemini 或 Google 生成式 API，请取消注释以下依赖：
+# langchain-google-genai==2.0.8
+# google-ai-generativelanguage==0.6.15
+# google-api-core==2.24.1
+# google-api-python-client==2.162.0
+# google-auth==2.38.0
+# google-generativeai==0.8.4
 
 # Mistral AI 支持（未使用，如需要请取消注释）
 # # Mistral AI支持 - MIT许可证 (当前版本: 0.2.4)
@@ -228,8 +235,25 @@ redis==5.2.0
 
 # Uvicorn ASGI服务器 - BSD许可证 (当前版本: 0.34.0)
 # https://github.com/encode/uvicorn/blob/master/LICENSE.md
-uvicorn==0.34.0
+# 使用 [standard] 以支持 websockets
+uvicorn[standard]==0.34.0
 
 # HTTPX异步HTTP客户端 - BSD许可证 (当前版本: 0.28.1)
 # https://github.com/encode/httpx/blob/master/LICENSE.md
 httpx==0.28.1
+
+# Pytest测试框架 - MIT许可证 (用于自动化脚本执行)
+# https://github.com/pytest-dev/pytest/blob/main/LICENSE
+pytest>=8.0.0
+
+# Playwright浏览器自动化 - Apache 2.0许可证
+# https://github.com/microsoft/playwright-python/blob/main/LICENSE
+playwright>=1.40.0
+
+# Token计数库 - MIT许可证 (用于上下文长度计算)
+# https://github.com/openai/tiktoken/blob/main/LICENSE
+tiktoken>=0.5.0
+
+# NLTK自然语言处理库 - Apache 2.0许可证 (用于文本分割)
+# https://github.com/nltk/nltk/blob/develop/LICENSE.txt
+nltk>=3.8.0

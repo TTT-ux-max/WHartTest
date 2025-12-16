@@ -102,10 +102,12 @@ WHartTest 后端基于 Django REST Framework 构建，采用 Python 生态的现
 - **作用**: 语言模型应用编排框架
 - **开源协议**: MIT License
 
-### LangChain 相关组件
+-### LangChain 相关组件
 - **langchain-openai** (0.3.17): OpenAI 集成
-- **langchain-anthropic** (0.2.4): Anthropic/Claude 支持
-- **langchain-google-genai** (2.0.8): Google Generative AI 支持
+<!-- 已移除：以下 LangChain 伙伴集成不是强制依赖，项目当前仅默认支持 OpenAI 兼容格式
+-- **langchain-anthropic** (0.2.4): Anthropic/Claude 支持
+-- **langchain-google-genai** (2.0.8): Google Generative AI 支持
+-->
 - **langchain-ollama** (0.2.2): Ollama 本地模型支持
 - **langchain-mistralai** (0.2.4): Mistral AI 支持
 - **langchain-cohere** (0.3.5): Cohere AI 支持
@@ -116,23 +118,25 @@ WHartTest 后端基于 Django REST Framework 构建，采用 Python 生态的现
 - **开源协议**: MIT License
 
 ### AI 服务客户端
-- **anthropic** (0.48.0): Anthropic API 客户端
+<!-- 已移除：如下 Google/Gemini 和 Anthropic 客户端依赖非必要，若需支持这些云端服务，可在 requirements 中取消注释并安装 -->
+<!-- - **anthropic** (0.48.0): Anthropic API 客户端 -->
 - **cohere** (5.15.0): Cohere API 客户端
 - **fireworks-ai** (0.15.12): Fireworks AI 客户端
-- **google-ai-generativelanguage** (0.6.15): Google AI 生成语言 API
-- **google-api-core** (2.24.1): Google API 核心库
-- **google-api-python-client** (2.162.0): Google API 客户端
-- **google-auth** (2.38.0): Google 认证库
-- **google-generativeai** (0.8.4): Google 生成式 AI
+<!-- - **google-ai-generativelanguage** (0.6.15): Google AI 生成语言 API
+ - **google-api-core** (2.24.1): Google API 核心库
+ - **google-api-python-client** (2.162.0): Google API 客户端
+ - **google-auth** (2.38.0): Google 认证库
+ - **google-generativeai** (0.8.4): Google 生成式 AI -->
 - **ollama** (0.4.7): Ollama 客户端
 - **开源协议**: MIT/Apache 2.0 License
 
 ### LangChain 社区组件
 - **langchain-community** (0.3.24): 社区扩展
 - **langchain-text-splitters** (0.3.8): 文本分割器
-- **langchain-chroma** (0.2.4): ChromaDB 集成
-- **langchain-huggingface** (0.2.0): HuggingFace 嵌入模型集成
-- **开源协议**: MIT License
+- **langchain-qdrant** (0.2.1): Qdrant 向量数据库集成
+- **qdrant-client** (1.11.3): Qdrant 客户端
+- **fastembed** (>=0.7.0): BM25 稀疏向量编码（混合检索）
+- **开源协议**: MIT/Apache 2.0 License
 
 ## 文档处理
 
@@ -159,3 +163,88 @@ WHartTest 后端基于 Django REST Framework 构建，采用 Python 生态的现
 
 **推荐方式**: 使用 API 嵌入服务（OpenAI、Azure、Ollama 等），无需下载大型模型文件。
 
+## 自然语言处理
+
+### NLTK
+- **版本**: >=3.8.0
+- **作用**: 自然语言处理工具包，用于文本分割和处理
+- **开源协议**: Apache License 2.0
+
+### Tiktoken
+- **版本**: >=0.5.0
+- **作用**: Token 计数库，用于上下文长度计算和 Token 管理
+- **开源协议**: MIT License
+
+## 实时通信
+
+### Django Channels
+- **版本**: 4.3.2
+- **作用**: Django WebSocket 支持
+- **开源协议**: BSD License
+
+### Channels Redis
+- **版本**: 4.3.0
+- **作用**: Channels 的 Redis 后端
+- **开源协议**: BSD License
+
+### Daphne
+- **版本**: 4.2.1
+- **作用**: ASGI 服务器，支持 HTTP、HTTP2 和 WebSocket
+- **开源协议**: BSD License
+
+## 异步任务
+
+### Celery
+- **版本**: 5.4.0
+- **作用**: 分布式任务队列
+- **开源协议**: BSD License
+
+### Redis
+- **版本**: 5.2.0
+- **作用**: Redis 客户端，用作 Celery 的 Broker 和 Backend
+- **开源协议**: MIT License
+
+## 数据库驱动
+
+### Psycopg2
+- **版本**: 2.9.10
+- **作用**: PostgreSQL 数据库驱动（Django ORM 使用）
+- **开源协议**: LGPL License
+
+### Psycopg3
+- **版本**: 3.3.1
+- **作用**: PostgreSQL 数据库驱动（LangGraph Checkpoint 使用）
+- **开源协议**: LGPL License
+
+## 测试与自动化
+
+### Pytest
+- **版本**: >=8.0.0
+- **作用**: Python 测试框架
+- **开源协议**: MIT License
+
+### Playwright
+- **版本**: >=1.40.0
+- **作用**: 浏览器自动化工具，用于端到端测试
+- **开源协议**: Apache License 2.0
+
+## ASGI 服务器
+
+### Uvicorn
+- **版本**: 0.34.0
+- **作用**: ASGI 服务器，支持 WebSocket
+- **开源协议**: BSD License
+
+## 语言检测
+
+### Langdetect
+- **版本**: 1.0.9
+- **作用**: 语言检测库
+- **开源协议**: Apache License 2.0
+
+## Markdown 处理
+
+### Markdown
+- **版本**: 3.9
+- **作用**: Markdown 文档解析和处理
+- **开源协议**: BSD License

@@ -17,7 +17,7 @@ from fastmcp import FastMCP
 from pydantic import Field
 
 mcp = FastMCP(
-    name="testcase_tools"
+    name="ms_tools"
 )
 
 def aes_encrypt(text: str, secret_key: str, iv: str) -> str:
@@ -153,10 +153,10 @@ def generate_custom_id():
     # 拼接固定的 '00000'
     return str(generate_custom_id.last_ts) + "00000"
 
-@mcp.tool(description="获取项目名称和项目id")
+@mcp.tool(description="【MS平台】获取项目名称和项目id")
 def get_project_name_and_id():
     """
-    获取项目名称和项目id
+    【MS平台】获取项目名称和项目id
     """
     r = client.get("/project/list/options/100001").json()
     if r.get("code") == 100200:
@@ -170,9 +170,9 @@ def get_project_name_and_id():
     else:
         return "请求失败，请重试。"
 
-@mcp.tool(description="获取模块的名称和对应id")
+@mcp.tool(description="【MS平台】获取模块的名称和对应id")
 def module_to_which_it_belongs(project_id: int = Field(description='项目id')):
-    """获取模块的名称和id"""
+    """【MS平台】获取模块的名称和id"""
     data_dict = client.get(f"/functional/case/module/tree/{project_id}").json()
     # 用于存储提取出的 id 和 name 的列表
     extracted_data = []
@@ -219,9 +219,9 @@ def module_to_which_it_belongs(project_id: int = Field(description='项目id')):
 
     return output_json_string
 
-@mcp.tool(description="获取用例等级的名称和对应id")
+@mcp.tool(description="【MS平台】获取用例等级的名称和对应id")
 def obtain_use_case_level(project_id: int = Field(description='项目id')):
-    """获取用例等级的名称和对应id"""
+    """【MS平台】获取用例等级的名称和对应id"""
     data = client.get(f"/functional/case/default/template/field/{project_id}").json()
 
     # 解析 JSON 字符串为 Python 字典
@@ -269,10 +269,10 @@ def obtain_use_case_level(project_id: int = Field(description='项目id')):
 
     return output_json_string
 
-@mcp.tool(description='生成测试用例步骤数据')
+@mcp.tool(description='【MS平台】生成测试用例步骤数据')
 def steps_for_generating_test_cases(testcases: list = Field(description='传入的步骤格式列表,示例：[{"desc": 输入账号,"result": 输入账号成功},{"desc": 输入密码,"result": 输入密码成功}]')):
     """
-    生成测试用例步骤数据
+    【MS平台】生成测试用例步骤数据
     testcases：传入一个列表包含字典，一个字典就是一个步骤和预期
     示例：[{"desc": 输入账号,"result": 输入账号成功},{"desc": 输入密码,"result": 输入密码成功}]
     """
@@ -297,7 +297,7 @@ def steps_for_generating_test_cases(testcases: list = Field(description='传入�
         num += 1
     return steps
 
-@mcp.tool(description='保存功能测试用例')
+@mcp.tool(description='【MS平台】保存功能测试用例')
 def add_functional_case(
         project_id: int = Field(description='项目id'),
         template_id: int = Field(description='模板id'),
@@ -309,7 +309,7 @@ def add_functional_case(
         steps: list = Field(description='用例步骤,示例：,[{"step_number": 1,"description": "步骤描述1","expected_result": "预期结果1"},{"step_number": 2,"description": "步骤描述2","expected_result": "预期结果2"}]'),
         ):
     """
-    保存功能测试用例
+    【MS平台】保存功能测试用例
     """
     try:
         steps_str = json.dumps(
@@ -354,17 +354,45 @@ def add_functional_case(
         }
 
         # 发起请求
-        response = client.post("/functional/case/add",files=files)
+        response = client.post("/functional/case/add", files=files)
         print("status =", response.status_code)
         print("content-type =", response.headers.get("Content-Type"))
         print("body-preview =", response.text[:200])
         # 如有非 2xx 状态码直接抛异常
         response.raise_for_status()
+        
+        response_payload = {}
+        try:
+            response_payload = response.json()
+        except ValueError:
+            pass
+        
+        created_case = {}
+        if isinstance(response_payload, dict):
+            created_case = response_payload.get("data") or {}
+        
+        # 返回详细的用例信息
+        testcase_snapshot = {
+            "id": created_case.get("id"),
+            "name": created_case.get("name", name),
+            "module_id": created_case.get("module_id") or module_id,
+            "level": created_case.get("level") or level,
+            "precondition": created_case.get("prerequisite") or prerequisite,
+            "notes": created_case.get("notes") or "",
+            "steps": created_case.get("steps") or steps,
+            "project_id": created_case.get("projectId") or project_id,
+        }
+        
         # 如果code返回100200，代表成功保存
-        if response.json().get("code") == 100200:
-            return "保存成功"
-        else:
-            return "保存失败，请重试"
+        if response_payload.get("code") == 100200:
+            return {
+                "message": "保存成功",
+                "testcase": testcase_snapshot
+            }
+        return {
+            "message": "保存失败，请重试",
+            "response": response_payload
+        }
     except requests.exceptions.HTTPError as e:
         print("HTTPError =", e)
         return e

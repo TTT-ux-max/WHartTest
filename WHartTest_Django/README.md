@@ -8,7 +8,7 @@ WhartTest 是一个基于 Django REST Framework 构建的AI驱动测试自动化
 
 ### 🤖 AI智能测试用例生成
 - 基于大语言模型的智能测试用例自动生成
-- 支持多种 LLM 供应商（OpenAI、Anthropic、Claude 等），可灵活配置
+ - 支持 OpenAI 兼容的 LLM 供应商（如 OpenAI、部分自建代理等），可灵活配置
 - 通过 MCP 工具调用，实现测试用例的智能分析和生成，支持自定义工具集
 - 自然语言描述转换为结构化测试用例，结合知识库提升准确性
 - 支持测试步骤、预期结果的自动生成，并可进行AI辅助优化
@@ -70,7 +70,7 @@ WhartTest 是一个基于 Django REST Framework 构建的AI驱动测试自动化
 - **数据库**: SQLite（开发）/ PostgreSQL（生产）
 - **认证**: JWT + API Key 双重认证
 - **AI引擎**: LangChain + LangGraph（测试用例生成核心）
-- **知识库引擎**: LangChain + ChromaDB + 多种嵌入服务（OpenAI/Azure/Ollama等）
+- **知识库引擎**: LangChain + Qdrant + 多种嵌入服务（OpenAI/Azure/Ollama等）
 - **MCP集成**: FastMCP + langchain-mcp-adapters（工具调用）
 - **API文档**: drf-spectacular (OpenAPI 3.0)
 - **环境变量管理**: python-dotenv
@@ -97,7 +97,8 @@ langchain-mcp-adapters
 
 # 知识库相关
 langchain-text-splitters
-langchain-chroma # ChromaDB向量数据库集成
+langchain-qdrant # Qdrant向量数据库集成
+fastembed # BM25稀疏向量（混合检索）
 # 注意：现使用CustomAPIEmbeddings通过API调用嵌入模型，无需以下本地模型依赖
 # langchain-huggingface # HuggingFace嵌入模型支持 (已弃用)
 # sentence-transformers # HuggingFace句子转换模型 (已弃用，约1GB+)
@@ -273,7 +274,7 @@ python manage.py runserver
 | `USER_AGENT` | 否 | 默认值 | `WhartTest-Django/1.0 (AI Test Case Generation Platform)` | HTTP 请求的用户代理标识 |
 | `DATABASE_URL` | 否 | SQLite | `postgresql://user:pass@localhost/dbname` | 数据库连接 URL（生产环境推荐 PostgreSQL） |
 | `OPENAI_API_KEY` | 否 | - | `sk-...` | OpenAI API 密钥（如果使用 OpenAI 模型） |
-| `ANTHROPIC_API_KEY` | 否 | - | `sk-ant-...` | Anthropic API 密钥（如果使用 Claude 模型） |
+| `ANTHROPIC_API_KEY` | 否 | - | `sk-ant-...` | Anthropic API 密钥（注：项目当前默认只支持 OpenAI 兼容格式，如需启用 Anthropic/Claude，请按需安装依赖并修改配置） |
 
 #### LLM 配置
 在管理后台或通过 API 配置 LLM 供应商和 API 密钥。
@@ -412,8 +413,8 @@ python manage.py createsuperuser
 # 7. 收集静态文件
 python manage.py collectstatic --noinput
 
-# 8. 启动生产服务器
-gunicorn wharttest_django.wsgi:application --bind 0.0.0.0:8000 --workers 4
+# 8. 启动生产服务器（支持 WebSocket）
+uvicorn wharttest_django.asgi:application --host 0.0.0.0 --port 8000 --workers 4
 ```
 
 ##### 方案2: Docker Compose部署（推荐）
@@ -452,7 +453,7 @@ DATABASE_URL=postgresql://user:password@localhost/dbname
 
 # LLM API Keys (根据实际使用的模型配置)
 OPENAI_API_KEY=your_openai_api_key_here
-# ANTHROPIC_API_KEY=your_anthropic_api_key_here
+# ANTHROPIC_API_KEY=your_anthropic_api_key_here (注：默认未启用 / 如需 Anthropic 支持，请取消注释并安装对应依赖)
 # ... 其他 LLM API Keys
 
 # CORS配置

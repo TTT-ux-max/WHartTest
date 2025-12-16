@@ -23,29 +23,27 @@ from wharttest_django.permissions import HasModelPermission
 # 导入提示词管理
 from prompts.models import UserPrompt
 
+# 导入上下文压缩模块
+from orchestrator_integration.context_compression import ConversationCompressor, CompressionSettings
+
 # --- New Imports ---
 from typing import TypedDict, Annotated, List
 from langchain_core.messages import AnyMessage, HumanMessage, AIMessage, ToolMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from langchain_anthropic import ChatAnthropic
-from langchain_ollama import ChatOllama
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_community.chat_models.tongyi import ChatTongyi
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages # Correct import for add_messages
-from langgraph.checkpoint.sqlite import SqliteSaver # For sync operations in ChatHistoryAPIView
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver # Use Async version for async views
 from langgraph.prebuilt import create_react_agent # For agent with tools
-# from langgraph.checkpoint.memory import InMemorySaver # Remove InMemorySaver import if no longer globally needed
 import os
 import uuid # Import uuid module
+import copy  # For deep copying checkpoint data
 # Knowledge base integration
 from knowledge.langgraph_integration import KnowledgeRAGService, ConversationalRAGService, LangGraphKnowledgeIntegration
 from knowledge.models import KnowledgeBase
-import sqlite3 # Import sqlite3 module
 from django.conf import settings
 import logging # Import logging
 from asgiref.sync import sync_to_async # For async operations in sync context
+# 统一的 Checkpointer 工厂
+from wharttest_django.checkpointer import get_async_checkpointer, get_sync_checkpointer, delete_checkpoints_by_thread_id, delete_checkpoints_batch, check_history_exists, get_thread_ids_by_prefix
 import json # For JSON serialization in streaming
 import asyncio # For async operations
 
@@ -62,70 +60,19 @@ logger = logging.getLogger(__name__) # Initialize logger
 # --- Helper Functions ---
 def create_llm_instance(active_config, temperature=0.7):
     """
-    根据配置创建合适的LLM实例，支持多种供应商
+    根据配置创建LLM实例
+    统一使用OpenAI兼容格式，支持所有兼容的服务商
     """
     model_identifier = active_config.name or "gpt-3.5-turbo"
-    provider = active_config.provider
     
-    if provider == 'anthropic':
-        # Anthropic/Claude
-        llm = ChatAnthropic(
-            model=model_identifier,
-            api_key=active_config.api_key,
-            temperature=temperature
-        )
-        logger.info(f"Initialized ChatAnthropic with model: {model_identifier}")
-    elif provider == 'openai':
-        # OpenAI 官方
-        llm = ChatOpenAI(
-            model=model_identifier,
-            temperature=temperature,
-            api_key=active_config.api_key,
-        )
-        logger.info(f"Initialized ChatOpenAI with model: {model_identifier}")
-    elif provider == 'ollama':
-        # Ollama 本地部署
-        llm = ChatOllama(
-            model=model_identifier,
-            base_url=active_config.api_url,
-            temperature=temperature
-        )
-        logger.info(f"Initialized ChatOllama with model: {model_identifier}")
-    elif provider == 'gemini':
-        # Google Gemini
-        llm = ChatGoogleGenerativeAI(
-            model=model_identifier,
-            google_api_key=active_config.api_key,
-            temperature=temperature
-        )
-        logger.info(f"Initialized ChatGoogleGenerativeAI with model: {model_identifier}")
-    elif provider == 'qwen':
-        # Alibaba Qwen (Tongyi)
-        llm = ChatTongyi(
-            model=model_identifier,
-            dashscope_api_key=active_config.api_key,
-            temperature=temperature
-        )
-        logger.info(f"Initialized ChatTongyi with model: {model_identifier}")
-    elif provider == 'openai_compatible':
-        # OpenAI 兼容服务
-        llm_kwargs = {
-            "model": model_identifier,
-            "temperature": temperature,
-            "api_key": active_config.api_key,
-            "base_url": active_config.api_url
-        }
-        
-        llm = ChatOpenAI(**llm_kwargs)
-        logger.info(f"Initialized OpenAI-compatible LLM with model: {model_identifier}")
-    else:
-        # 默认使用OpenAI
-        llm = ChatOpenAI(
-            model=model_identifier,
-            temperature=temperature,
-            api_key=active_config.api_key,
-        )
-        logger.info(f"Initialized default ChatOpenAI with model: {model_identifier}")
+    llm_kwargs = {
+        "model": model_identifier,
+        "temperature": temperature,
+        "api_key": active_config.api_key,
+        "base_url": active_config.api_url
+    }
+    llm = ChatOpenAI(**llm_kwargs)
+    logger.info(f"Initialized OpenAI-compatible LLM with model: {model_identifier}, base_url: {active_config.api_url}")
     
     return llm
 
@@ -402,7 +349,7 @@ class ChatAPIView(APIView):
         # 知识库相关参数
         knowledge_base_id = request.data.get('knowledge_base_id')
         use_knowledge_base = request.data.get('use_knowledge_base', True)  # 默认启用知识库
-        similarity_threshold = request.data.get('similarity_threshold', 0.7)
+        similarity_threshold = request.data.get('similarity_threshold', 0.5)
         top_k = request.data.get('top_k', 5)
 
         # 提示词相关参数
@@ -443,13 +390,26 @@ class ChatAPIView(APIView):
             # 如果是新会话，立即创建ChatSession对象
             if is_new_session:
                 try:
+                    # 获取关联的提示词对象
+                    prompt_obj = None
+                    if prompt_id:
+                        try:
+                            prompt_obj = await sync_to_async(UserPrompt.objects.get)(
+                                id=prompt_id,
+                                user=request.user,
+                                is_active=True
+                            )
+                        except UserPrompt.DoesNotExist:
+                            logger.warning(f"ChatAPIView: Prompt {prompt_id} not found or inactive")
+                    
                     await sync_to_async(ChatSession.objects.create)(
                         user=request.user,
                         session_id=session_id,
                         project=project,
-                        title=f"新对话 - {user_message_content[:30]}" # 使用消息内容作为临时标题
+                        prompt=prompt_obj,
+                        title=f"新对话 - {user_message_content[:30]}"
                     )
-                    logger.info(f"ChatAPIView: Created new ChatSession entry for session_id: {session_id}")
+                    logger.info(f"ChatAPIView: Created new ChatSession entry for session_id: {session_id}, prompt_id: {prompt_id}")
                 except Exception as e:
                     logger.error(f"ChatAPIView: Failed to create ChatSession entry: {e}", exc_info=True)
 
@@ -486,8 +446,7 @@ class ChatAPIView(APIView):
             llm = create_llm_instance(active_config, temperature=0.7)
             logger.info(f"ChatAPIView: Initialized LLM with provider auto-detection")
 
-            db_path = os.path.join(str(settings.BASE_DIR), "chat_history.sqlite")
-            async with AsyncSqliteSaver.from_conn_string(db_path) as actual_memory_checkpointer: # Use async with and AsyncSqliteSaver
+            async with get_async_checkpointer() as actual_memory_checkpointer:
                 # Load remote MCP tools
                 logger.info("ChatAPIView: Attempting to load remote MCP tools.")
                 mcp_tools_list = []
@@ -644,7 +603,7 @@ class ChatAPIView(APIView):
                 if effective_prompt:
                     try:
                         # 尝试获取当前会话的历史消息
-                        with SqliteSaver.from_conn_string(db_path) as memory:
+                        with get_sync_checkpointer() as memory:
                             checkpoint_generator = memory.list(config={"configurable": {"thread_id": thread_id}})
                             checkpoint_tuples_list = list(checkpoint_generator)
 
@@ -689,9 +648,9 @@ class ChatAPIView(APIView):
 
                 invoke_config = {
                     "configurable": {"thread_id": thread_id},
-                    "recursion_limit": 100  # 增加递归限制，支持生成更多测试用例
+                    "recursion_limit": 1000  # 支持约500次工具调用
                 }
-                logger.info(f"ChatAPIView: Set recursion_limit to 100 for thread_id: {thread_id}")
+                logger.info(f"ChatAPIView: Set recursion_limit to 1000 for thread_id: {thread_id}")
                 # Checkpointer is already configured in both agent and basic chatbot
 
                 final_state = await runnable_to_invoke.ainvoke(
@@ -845,38 +804,39 @@ class ChatHistoryAPIView(APIView):
                 "errors": {"project_id": ["Permission denied or project not found."]}
             }, status=status.HTTP_403_FORBIDDEN)
 
+        # 获取会话信息（包括关联的提示词）
+        prompt_id = None
+        prompt_name = None
+        try:
+            chat_session = ChatSession.objects.select_related('prompt').get(
+                session_id=session_id,
+                user=request.user,
+                project_id=project_id
+            )
+            if chat_session.prompt:
+                prompt_id = chat_session.prompt.id
+                prompt_name = chat_session.prompt.name
+        except ChatSession.DoesNotExist:
+            pass  # 会话可能还没创建到数据库
+
         thread_id_parts = [str(request.user.id), str(project_id), str(session_id)]
         thread_id = "_".join(thread_id_parts)
 
-        db_path = os.path.join(str(settings.BASE_DIR), "chat_history.sqlite")
         history_messages = []
 
         try:
-            # 首先尝试直接查询数据库以检查是否有数据
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-
-            # 检查是否有对应的thread_id记录
-            cursor.execute("SELECT COUNT(*) FROM checkpoints WHERE thread_id = ?", (thread_id,))
-            checkpoint_count = cursor.fetchone()[0]
-            logger.info(f"ChatHistoryAPIView: Found {checkpoint_count} checkpoints in database for thread_id: {thread_id}")
-
-            if checkpoint_count == 0:
-                # 如果没有找到记录，检查所有的thread_id
-                cursor.execute("SELECT DISTINCT thread_id FROM checkpoints LIMIT 10")
-                all_threads = cursor.fetchall()
-                logger.info(f"ChatHistoryAPIView: Available thread_ids in database: {[t[0] for t in all_threads]}")
-
-            conn.close()
-
-            # 使用SqliteSaver读取数据
-            with SqliteSaver.from_conn_string(db_path) as memory:
-                # Fetch all checkpoints for the thread
-                # The list method returns CheckpointTuple, we need the 'checkpoint' attribute
+            # 使用统一的 Checkpointer 读取数据
+            from wharttest_django.checkpointer import get_database_type, get_db_connection_string
+            db_type = get_database_type()
+            conn_str = get_db_connection_string()
+            logger.warning(f"ChatHistoryAPIView: DEBUG - database_type={db_type}, connection={conn_str}")
+            
+            with get_sync_checkpointer() as memory:
+                logger.warning(f"ChatHistoryAPIView: DEBUG - Checkpointer type={type(memory).__name__}")
                 checkpoint_generator = memory.list(config={"configurable": {"thread_id": thread_id}})
-                checkpoint_tuples_list = list(checkpoint_generator) # Convert generator to list
+                checkpoint_tuples_list = list(checkpoint_generator)
 
-                logger.info(f"ChatHistoryAPIView: SqliteSaver found {len(checkpoint_tuples_list)} checkpoints for thread_id: {thread_id}")
+                logger.info(f"ChatHistoryAPIView: Found {len(checkpoint_tuples_list)} checkpoints for thread_id: {thread_id}")
 
                 if checkpoint_tuples_list: # Check if the list is not empty
                     # 构建消息到时间戳的映射
@@ -903,9 +863,13 @@ class ChatHistoryAPIView(APIView):
 
                     # 获取最新checkpoint的消息列表
                     latest_checkpoint_tuple = checkpoint_tuples_list[0]
+                    logger.info(f"ChatHistoryAPIView: latest_checkpoint_tuple type={type(latest_checkpoint_tuple).__name__}")
                     if latest_checkpoint_tuple and hasattr(latest_checkpoint_tuple, 'checkpoint'):
                         checkpoint_data = latest_checkpoint_tuple.checkpoint
-                        logger.info(f"ChatHistoryAPIView: Processing checkpoint with keys: {list(checkpoint_data.keys()) if checkpoint_data else 'None'}")
+                        logger.info(f"ChatHistoryAPIView: checkpoint_data type={type(checkpoint_data).__name__}, keys={list(checkpoint_data.keys()) if isinstance(checkpoint_data, dict) else 'N/A'}")
+                        if isinstance(checkpoint_data, dict) and 'channel_values' in checkpoint_data:
+                            channel_values = checkpoint_data['channel_values']
+                            logger.info(f"ChatHistoryAPIView: channel_values keys={list(channel_values.keys()) if isinstance(channel_values, dict) else 'N/A'}")
 
                         if checkpoint_data and 'channel_values' in checkpoint_data and 'messages' in checkpoint_data['channel_values']:
                             messages = checkpoint_data['channel_values']['messages']
@@ -956,17 +920,42 @@ class ChatHistoryAPIView(APIView):
                                         logger.debug(f"ChatHistoryAPIView: Skipping empty AI message at index {i}")
                                         continue
                                     
-                                    # 提取additional_kwargs中的agent信息
+                                    # ⭐ 提取 additional_kwargs 中的 metadata（包含 Agent Loop 元数据）
                                     agent_info = None
                                     agent_type = None
+                                    step = None
+                                    max_steps = None
+                                    sse_event_type = None
+                                    
                                     if hasattr(msg, 'additional_kwargs') and msg.additional_kwargs:
+                                        # 兼容旧格式（直接存在 additional_kwargs）
                                         agent_info = msg.additional_kwargs.get('agent')
                                         agent_type = msg.additional_kwargs.get('agent_type')
-                                        logger.debug(f"ChatHistoryAPIView: AI message has agent info: {agent_info}, type: {agent_type}")
+                                        
+                                        # ⭐ 从 metadata 子字段提取（新格式）
+                                        metadata = msg.additional_kwargs.get('metadata', {})
+                                        if metadata:
+                                            agent_info = agent_info or metadata.get('agent')
+                                            agent_type = agent_type or metadata.get('agent_type')
+                                            step = metadata.get('step')
+                                            max_steps = metadata.get('max_steps')
+                                            sse_event_type = metadata.get('sse_event_type')
+                                        
+                                        logger.debug(f"ChatHistoryAPIView: AI message metadata - agent: {agent_info}, type: {agent_type}, step: {step}, sse_type: {sse_event_type}")
 
                                 elif isinstance(msg, ToolMessage):
                                     msg_type = "tool"
                                     content = msg.content if hasattr(msg, 'content') else str(msg)
+                                    
+                                    # ⭐ 提取工具消息的元数据
+                                    step = None
+                                    sse_event_type = None
+                                    if hasattr(msg, 'additional_kwargs') and msg.additional_kwargs:
+                                        metadata = msg.additional_kwargs.get('metadata', {})
+                                        if metadata:
+                                            step = metadata.get('step')
+                                            sse_event_type = metadata.get('sse_event_type')
+                                        logger.debug(f"ChatHistoryAPIView: Tool message metadata - step: {step}, sse_type: {sse_event_type}")
                                 else:
                                     # 处理其他类型的消息，可能是工具调用结果
                                     content = msg.content if hasattr(msg, 'content') else str(msg)
@@ -987,15 +976,33 @@ class ChatHistoryAPIView(APIView):
                                     # 如果消息包含图片，添加图片数据
                                     if msg_type == "human" and 'image_data' in locals() and image_data:
                                         message_data["image"] = image_data
-                                    # 如果AI消息包含agent信息，添加到返回数据中
-                                    if msg_type == "ai" and 'agent_info' in locals() and agent_info:
-                                        message_data["agent"] = agent_info
+                                    
+                                    # ⭐ 如果 AI 消息包含 agent 信息（Agent Loop），添加完整元数据
+                                    if msg_type == "ai":
+                                        if 'agent_info' in locals() and agent_info:
+                                            message_data["agent"] = agent_info
                                         if 'agent_type' in locals() and agent_type:
                                             message_data["agent_type"] = agent_type
-                                        # 🎨 检查是否是思考过程消息
+                                        if 'step' in locals() and step is not None:
+                                            message_data["step"] = step  # ⭐ 步骤号
+                                        if 'max_steps' in locals() and max_steps is not None:
+                                            message_data["max_steps"] = max_steps
+                                        if 'sse_event_type' in locals() and sse_event_type:
+                                            message_data["sse_event_type"] = sse_event_type  # ⭐ SSE 事件类型
+                                        
+                                        # 检查是否是思考过程消息
                                         if hasattr(msg, 'additional_kwargs') and msg.additional_kwargs:
-                                            if msg.additional_kwargs.get('is_thinking_process'):
+                                            metadata = msg.additional_kwargs.get('metadata', {})
+                                            if metadata.get('is_thinking_process'):
                                                 message_data["is_thinking_process"] = True
+                                    
+                                    # ⭐ 如果是工具消息，添加步骤号和事件类型
+                                    elif msg_type == "tool":
+                                        if 'step' in locals() and step is not None:
+                                            message_data["step"] = step
+                                        if 'sse_event_type' in locals() and sse_event_type:
+                                            message_data["sse_event_type"] = sse_event_type
+                                    
                                     # 添加对应的时间戳
                                     if i in message_timestamps:
                                         timestamp_str = message_timestamps[i]
@@ -1021,6 +1028,22 @@ class ChatHistoryAPIView(APIView):
                     logger.info(f"ChatHistoryAPIView: No checkpoints found for thread_id: {thread_id}")
             # By processing only the latest checkpoint, we get the final state of messages, avoiding duplicates.
 
+            # 计算上下文Token使用信息
+            context_token_count = 0
+            context_limit = 128000
+            try:
+                from requirements.context_limits import context_checker
+                active_config = LLMConfig.objects.get(is_active=True)
+                context_limit = active_config.context_limit or 128000
+                
+                for msg_data in history_messages:
+                    content = msg_data.get('content', '')
+                    if content:
+                        content_str = content if isinstance(content, str) else str(content)
+                        context_token_count += context_checker.count_tokens(content_str, active_config.name or "gpt-4o")
+            except Exception as e:
+                logger.warning(f"ChatHistoryAPIView: Failed to calculate token count: {e}")
+
             return Response({
                 "status": "success", "code": status.HTTP_200_OK,
                 "message": "Chat history retrieved successfully.",
@@ -1029,7 +1052,11 @@ class ChatHistoryAPIView(APIView):
                     "session_id": session_id,
                     "project_id": project_id,
                     "project_name": project.name,
-                    "history": history_messages
+                    "prompt_id": prompt_id,
+                    "prompt_name": prompt_name,
+                    "history": history_messages,
+                    "context_token_count": context_token_count,
+                    "context_limit": context_limit
                 }
             }, status=status.HTTP_200_OK)
 
@@ -1082,57 +1109,47 @@ class ChatHistoryAPIView(APIView):
         thread_id_parts = [str(request.user.id), str(project_id), str(session_id)]
         thread_id = "_".join(thread_id_parts)
 
-        db_path = os.path.join(str(settings.BASE_DIR), "chat_history.sqlite")
-
-        if not os.path.exists(db_path):
+        if not check_history_exists():
             return Response({
-                "status": "success", # Or "error" with 404 if preferred
-                "code": status.HTTP_200_OK, # Or 404
-                "message": "No chat history found to delete (history file does not exist).",
+                "status": "success",
+                "code": status.HTTP_200_OK,
+                "message": "No chat history found to delete (history storage does not exist).",
                 "data": {"thread_id": thread_id, "session_id": session_id, "deleted_count": 0}
             }, status=status.HTTP_200_OK)
 
-        conn = None
         try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
+            deleted_count = delete_checkpoints_by_thread_id(thread_id)
 
-            # It's good practice to check how many rows were affected.
-            cursor.execute("DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,))
-            deleted_count = cursor.rowcount # Get the number of rows deleted
+            # 同时删除 Django ChatSession 记录
+            django_deleted_count = 0
+            try:
+                deleted_result = ChatSession.objects.filter(
+                    session_id=session_id,
+                    user=request.user,
+                    project=project
+                ).delete()
+                django_deleted_count = deleted_result[0]
+                logger.info(f"ChatHistoryAPIView: Deleted {django_deleted_count} ChatSession records for session_id: {session_id}")
+            except Exception as e:
+                logger.warning(f"ChatHistoryAPIView: Failed to delete ChatSession for {session_id}: {e}")
 
-            conn.commit()
-
-            if deleted_count > 0:
-                message = f"Successfully deleted chat history for session_id: {session_id} (Thread ID: {thread_id}). {deleted_count} records removed."
+            if deleted_count > 0 or django_deleted_count > 0:
+                message = f"Successfully deleted chat history for session_id: {session_id} (Thread ID: {thread_id}). {deleted_count} checkpoint records and {django_deleted_count} session records removed."
             else:
                 message = f"No chat history found for session_id: {session_id} (Thread ID: {thread_id}) to delete."
 
             return Response({
                 "status": "success", "code": status.HTTP_200_OK,
                 "message": message,
-                "data": {"thread_id": thread_id, "session_id": session_id, "deleted_count": deleted_count}
+                "data": {"thread_id": thread_id, "session_id": session_id, "deleted_count": deleted_count, "session_deleted_count": django_deleted_count}
             }, status=status.HTTP_200_OK)
 
-        except sqlite3.Error as e:
-            # import logging
-            # logging.exception(f"SQLite error deleting chat history for thread_id {thread_id}: {e}")
+        except Exception as e:
             return Response({
                 "status": "error", "code": status.HTTP_500_INTERNAL_SERVER_ERROR,
                 "message": f"Database error while deleting chat history: {str(e)}", "data": {},
                 "errors": {"database_error": [str(e)]}
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        except Exception as e:
-            # import logging
-            # logging.exception(f"Unexpected error deleting chat history for thread_id {thread_id}: {e}")
-            return Response({
-                "status": "error", "code": status.HTTP_500_INTERNAL_SERVER_ERROR,
-                "message": f"An unexpected error occurred: {str(e)}", "data": {},
-                "errors": {"unexpected_error": [str(e)]}
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        finally:
-            if conn:
-                conn.close()
 
 
 class ChatBatchDeleteAPIView(APIView):
@@ -1184,66 +1201,45 @@ class ChatBatchDeleteAPIView(APIView):
                 "errors": {"project_id": ["Permission denied or project not found."]}
             }, status=status.HTTP_403_FORBIDDEN)
 
-        db_path = os.path.join(str(settings.BASE_DIR), "chat_history.sqlite")
-        
-        if not os.path.exists(db_path):
+        if not check_history_exists():
             return Response({
                 "status": "success",
                 "code": status.HTTP_200_OK,
-                "message": "No chat history found to delete (history file does not exist).",
+                "message": "No chat history found to delete (history storage does not exist).",
                 "data": {"deleted_count": 0, "failed_sessions": []}
             }, status=status.HTTP_200_OK)
 
-        conn = None
         total_deleted = 0
         failed_sessions = []
         
         try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-
+            # 构建所有 thread_ids
+            thread_ids = []
+            for session_id in session_ids:
+                thread_id_parts = [str(request.user.id), str(project_id), str(session_id)]
+                thread_ids.append("_".join(thread_id_parts))
+            
+            # 批量删除 checkpoints
+            total_deleted = delete_checkpoints_batch(thread_ids)
+            
+            # 删除 Django 中的 ChatSession 记录
             for session_id in session_ids:
                 try:
-                    # 构建thread_id
-                    thread_id_parts = [str(request.user.id), str(project_id), str(session_id)]
-                    thread_id = "_".join(thread_id_parts)
-
-                    # 删除对应的checkpoints
-                    cursor.execute("DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,))
-                    deleted_count = cursor.rowcount
-                    
-                    if deleted_count > 0:
-                        total_deleted += deleted_count
-                        logger.info(f"Deleted {deleted_count} records for session_id: {session_id}")
-                    else:
-                        logger.warning(f"No records found for session_id: {session_id}")
-                        failed_sessions.append({
-                            "session_id": session_id,
-                            "reason": "No records found"
-                        })
-                    
-                    # 同时删除Django中的ChatSession记录
-                    try:
-                        ChatSession.objects.filter(
-                            session_id=session_id,
-                            user=request.user,
-                            project=project
-                        ).delete()
-                    except Exception as e:
-                        logger.warning(f"Failed to delete ChatSession for {session_id}: {e}")
-                        
+                    ChatSession.objects.filter(
+                        session_id=session_id,
+                        user=request.user,
+                        project=project
+                    ).delete()
                 except Exception as e:
-                    logger.error(f"Error deleting session {session_id}: {e}")
+                    logger.warning(f"Failed to delete ChatSession for {session_id}: {e}")
                     failed_sessions.append({
                         "session_id": session_id,
                         "reason": str(e)
                     })
 
-            conn.commit()
-
             message = f"Successfully deleted {total_deleted} checkpoint records from {len(session_ids)} sessions."
             if failed_sessions:
-                message += f" {len(failed_sessions)} sessions failed or had no records."
+                message += f" {len(failed_sessions)} sessions had issues with Django model deletion."
 
             return Response({
                 "status": "success", "code": status.HTTP_200_OK,
@@ -1255,29 +1251,20 @@ class ChatBatchDeleteAPIView(APIView):
                 }
             }, status=status.HTTP_200_OK)
 
-        except sqlite3.Error as e:
-            logger.error(f"SQLite error during batch delete: {e}", exc_info=True)
+        except Exception as e:
+            logger.error(f"Error during batch delete: {e}", exc_info=True)
             return Response({
                 "status": "error", "code": status.HTTP_500_INTERNAL_SERVER_ERROR,
                 "message": f"Database error while batch deleting chat history: {str(e)}", "data": {},
                 "errors": {"database_error": [str(e)]}
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        except Exception as e:
-            logger.error(f"Unexpected error during batch delete: {e}", exc_info=True)
-            return Response({
-                "status": "error", "code": status.HTTP_500_INTERNAL_SERVER_ERROR,
-                "message": f"An unexpected error occurred: {str(e)}", "data": {},
-                "errors": {"unexpected_error": [str(e)]}
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        finally:
-            if conn:
-                conn.close()
 
 
 class UserChatSessionsAPIView(APIView):
     """
-    API endpoint for listing all chat session IDs for the authenticated user in a specific project.
+    API endpoint for listing all chat sessions for the authenticated user in a specific project.
     支持项目隔离，只返回指定项目的聊天会话。
+    优先从Django ChatSession模型读取（带标题和时间），回退到sqlite查询session_id。
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -1315,67 +1302,55 @@ class UserChatSessionsAPIView(APIView):
                 "errors": {"project_id": ["Permission denied or project not found."]}
             }, status=status.HTTP_403_FORBIDDEN)
 
-        db_path = os.path.join(str(settings.BASE_DIR), "chat_history.sqlite")
-        session_ids = set() # Use a set to store unique session_ids
+        # 优先从Django ChatSession模型读取会话列表（带标题和时间，无需查sqlite）
+        django_sessions = ChatSession.objects.filter(
+            user=request.user,
+            project_id=project_id
+        ).order_by('-updated_at').values('session_id', 'title', 'updated_at', 'created_at')
+        
+        sessions_list = []
+        django_session_ids = set()
+        
+        for s in django_sessions:
+            django_session_ids.add(s['session_id'])
+            sessions_list.append({
+                'id': s['session_id'],
+                'title': s['title'] or '新对话',
+                'updated_at': s['updated_at'].isoformat() if s['updated_at'] else None,
+                'created_at': s['created_at'].isoformat() if s['created_at'] else None,
+            })
+        
+        # 回退：检查checkpoints中是否有Django模型没记录的会话
+        if check_history_exists():
+            try:
+                thread_id_prefix = f"{user_id}_{project_id}_"
+                thread_ids = get_thread_ids_by_prefix(thread_id_prefix)
+                
+                for full_thread_id in thread_ids:
+                    if full_thread_id.startswith(thread_id_prefix):
+                        session_id_part = full_thread_id[len(thread_id_prefix):]
+                        if session_id_part and session_id_part not in django_session_ids:
+                            # checkpoints有但Django没有的会话，添加到列表
+                            sessions_list.append({
+                                'id': session_id_part,
+                                'title': f'会话 {session_id_part[:8]}...',
+                                'updated_at': None,
+                                'created_at': None,
+                            })
+            except Exception as e:
+                logger.warning(f"UserChatSessionsAPIView: Failed to check checkpoints for additional sessions: {e}")
 
-        if not os.path.exists(db_path):
-            return Response({
-                "status": "success",
-                "code": status.HTTP_200_OK,
-                "message": "No chat history found (history file does not exist).",
-                "data": {"user_id": user_id, "sessions": []}
-            }, status=status.HTTP_200_OK)
-
-        conn = None
-        try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-
-            # Query for distinct thread_ids starting with the user_id and project_id prefix
-            # The thread_id is stored as "USERID_PROJECTID_SESSIONID"
-            thread_id_prefix = f"{user_id}_{project_id}_"
-            cursor.execute("SELECT DISTINCT thread_id FROM checkpoints WHERE thread_id LIKE ?", (thread_id_prefix + '%',))
-
-            rows = cursor.fetchall()
-
-            for row in rows:
-                full_thread_id = row[0]
-                # Extract session_id part: everything after "USERID_PROJECTID_"
-                if full_thread_id.startswith(thread_id_prefix):
-                    session_id_part = full_thread_id[len(thread_id_prefix):]
-                    if session_id_part: # Ensure there's something after the prefix
-                        session_ids.add(session_id_part)
-
-            return Response({
-                "status": "success", "code": status.HTTP_200_OK,
-                "message": "User chat sessions retrieved successfully.",
-                "data": {
-                    "user_id": user_id,
-                    "project_id": project_id,
-                    "project_name": project.name,
-                    "sessions": sorted(list(session_ids))
-                } # Return sorted list
-            }, status=status.HTTP_200_OK)
-
-        except sqlite3.Error as e:
-            # import logging
-            # logging.exception(f"SQLite error retrieving sessions for user {user_id}: {e}")
-            return Response({
-                "status": "error", "code": status.HTTP_500_INTERNAL_SERVER_ERROR,
-                "message": f"Database error while retrieving user sessions: {str(e)}", "data": {},
-                "errors": {"database_error": [str(e)]}
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        except Exception as e:
-            # import logging
-            # logging.exception(f"Unexpected error retrieving sessions for user {user_id}: {e}")
-            return Response({
-                "status": "error", "code": status.HTTP_500_INTERNAL_SERVER_ERROR,
-                "message": f"An unexpected error occurred: {str(e)}", "data": {},
-                "errors": {"unexpected_error": [str(e)]}
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        finally:
-            if conn:
-                conn.close()
+        return Response({
+            "status": "success", "code": status.HTTP_200_OK,
+            "message": "User chat sessions retrieved successfully.",
+            "data": {
+                "user_id": user_id,
+                "project_id": project_id,
+                "project_name": project.name,
+                "sessions": [s['id'] for s in sessions_list],  # 保持向后兼容
+                "sessions_detail": sessions_list  # 新增：带详情的会话列表
+            }
+        }, status=status.HTTP_200_OK)
 
 
 from django.views import View
@@ -1450,8 +1425,7 @@ class ChatStreamAPIView(View):
             llm = create_llm_instance(active_config, temperature=0.7)
             logger.info(f"ChatStreamAPIView: Initialized LLM with provider auto-detection")
 
-            db_path = os.path.join(str(settings.BASE_DIR), "chat_history.sqlite")
-            async with AsyncSqliteSaver.from_conn_string(db_path) as actual_memory_checkpointer:
+            async with get_async_checkpointer() as actual_memory_checkpointer:
                 # 加载远程MCP工具
                 logger.info("ChatStreamAPIView: Attempting to load remote MCP tools.")
                 mcp_tools_list = []
@@ -1589,6 +1563,14 @@ class ChatStreamAPIView(View):
                 thread_id = "_".join(thread_id_parts)
                 logger.info(f"ChatStreamAPIView: Using thread_id: {thread_id} for project: {project.name}")
 
+                # 预加载 checkpoint 数据（供系统提示词检查和上下文压缩共用）
+                checkpoint_tuples_list = []
+                try:
+                    async for checkpoint_tuple in actual_memory_checkpointer.alist(config={"configurable": {"thread_id": thread_id}}):
+                        checkpoint_tuples_list.append(checkpoint_tuple)
+                except Exception as e:
+                    logger.warning(f"ChatStreamAPIView: Failed to load checkpoint history: {e}")
+                
                 # 构建消息列表，检查是否需要添加系统提示词
                 messages_list = []
 
@@ -1600,11 +1582,7 @@ class ChatStreamAPIView(View):
                 should_add_system_prompt = False
                 if effective_prompt:
                     try:
-                        # 尝试获取当前会话的历史消息 - 使用异步接口
-                        checkpoint_tuples_list = []
-                        async for checkpoint_tuple in actual_memory_checkpointer.alist(config={"configurable": {"thread_id": thread_id}}):
-                            checkpoint_tuples_list.append(checkpoint_tuple)
-
+                        # 使用预加载的 checkpoint 数据检查
                         if checkpoint_tuples_list:
                             # 检查最新checkpoint中是否已有系统提示词
                             latest_checkpoint = checkpoint_tuples_list[0].checkpoint
@@ -1672,12 +1650,121 @@ class ChatStreamAPIView(View):
                         return
                     logger.info(f"ChatStreamAPIView: Message {i}: {type(msg).__name__} with content length {len(str(msg.content))}")
 
+                # 上下文检查与压缩
+                context_limit = active_config.context_limit or 128000
+                try:
+                    from requirements.context_limits import context_checker
+                    
+                    # 初始化压缩器
+                    compression_settings = CompressionSettings(
+                        max_context_tokens=context_limit,
+                        trigger_ratio=0.75
+                    )
+                    conversation_compressor = ConversationCompressor(
+                        llm=llm,
+                        model_name=active_config.name or getattr(llm, "model_name", "gpt-4o"),
+                        settings=compression_settings
+                    )
+                    
+                    # 从预加载的 checkpoint 获取历史消息和压缩状态
+                    latest_checkpoint_tuple = checkpoint_tuples_list[0] if checkpoint_tuples_list else None
+                    history_messages = []
+                    existing_metadata = {}
+                    summary_text = None
+                    summarized_count = 0
+                    
+                    if latest_checkpoint_tuple:
+                        latest_checkpoint = latest_checkpoint_tuple.checkpoint or {}
+                        history_messages = latest_checkpoint.get('channel_values', {}).get('messages', []) or []
+                        existing_metadata = latest_checkpoint_tuple.metadata or {}
+                        compression_state = dict(existing_metadata.get("context_compression") or {})
+                        summary_text = compression_state.get("context_summary")
+                        summarized_count = compression_state.get("summarized_message_count", 0)
+                    
+                    # 执行压缩检查
+                    compression_result = await conversation_compressor.prepare(
+                        messages=history_messages,
+                        summary_text=summary_text,
+                        summarized_count=summarized_count,
+                    )
+                    history_token_count = compression_result.token_count
+                    
+                    # 如果压缩被触发，更新 checkpoint
+                    if latest_checkpoint_tuple and (
+                        compression_result.triggered
+                        or "context_summary" in compression_result.state_updates
+                        or "summarized_message_count" in compression_result.state_updates
+                    ):
+                        updated_checkpoint = copy.deepcopy(latest_checkpoint_tuple.checkpoint)
+                        updated_channel_values = updated_checkpoint.setdefault("channel_values", {})
+                        if compression_result.triggered:
+                            updated_channel_values["messages"] = compression_result.messages
+                            logger.info(f"ChatStreamAPIView: Context compression triggered, messages reduced from {len(history_messages)} to {len(compression_result.messages)}")
+                        
+                        updated_metadata = copy.deepcopy(existing_metadata)
+                        compression_meta = dict(updated_metadata.get("context_compression") or {})
+                        if "context_summary" in compression_result.state_updates:
+                            compression_meta["context_summary"] = compression_result.state_updates["context_summary"]
+                        if "summarized_message_count" in compression_result.state_updates:
+                            compression_meta["summarized_message_count"] = compression_result.state_updates["summarized_message_count"]
+                        compression_meta["context_token_count"] = compression_result.state_updates.get("context_token_count", history_token_count)
+                        updated_metadata["context_compression"] = compression_meta
+                        
+                        # 写入更新后的 checkpoint
+                        checkpoint_config = latest_checkpoint_tuple.config.get("configurable", {})
+                        update_config = {
+                            "configurable": {
+                                "thread_id": checkpoint_config.get("thread_id"),
+                                "checkpoint_ns": checkpoint_config.get("checkpoint_ns", ""),
+                            }
+                        }
+                        parent_config = latest_checkpoint_tuple.parent_config
+                        if parent_config:
+                            parent_checkpoint_id = parent_config.get("configurable", {}).get("checkpoint_id")
+                            if parent_checkpoint_id:
+                                update_config["configurable"]["checkpoint_id"] = parent_checkpoint_id
+                        
+                        await actual_memory_checkpointer.aput(
+                            update_config,
+                            updated_checkpoint,
+                            updated_metadata,
+                            updated_checkpoint.get("channel_versions", {}),
+                        )
+                        logger.info(f"ChatStreamAPIView: Applied context compression for thread {thread_id}")
+                    
+                    # 计算总 token 数（历史 + 当前消息）
+                    total_tokens = history_token_count
+                    for msg in messages_list:
+                        if hasattr(msg, 'content') and msg.content:
+                            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+                            total_tokens += context_checker.count_tokens(content, active_config.name or "gpt-4o")
+                    
+                    usage_ratio = total_tokens / context_limit
+                    logger.info(f"ChatStreamAPIView: Context usage: {total_tokens}/{context_limit} ({usage_ratio*100:.1f}%)")
+                    
+                    # 压缩后仍超过95%时拒绝新消息
+                    if usage_ratio > 0.95:
+                        logger.warning(f"ChatStreamAPIView: Context limit exceeded after compression ({usage_ratio*100:.1f}%)")
+                        yield create_sse_data({
+                            'type': 'error', 
+                            'message': f'对话上下文已达上限（{total_tokens}/{context_limit} tokens），压缩后仍无法继续，请新建对话。'
+                        })
+                        return
+                    # 压缩后仍超过85%时发送警告
+                    elif usage_ratio > 0.85:
+                        yield create_sse_data({
+                            'type': 'warning', 
+                            'message': f'对话上下文即将达到上限（{int(usage_ratio*100)}%），建议尽快新建对话。'
+                        })
+                except Exception as e:
+                    logger.warning(f"ChatStreamAPIView: Context check/compression failed: {e}", exc_info=True)
+
                 input_messages = {"messages": messages_list}
                 invoke_config = {
                     "configurable": {"thread_id": thread_id},
-                    "recursion_limit": 100  # 增加递归限制，支持生成更多测试用例
+                    "recursion_limit": 1000  # 支持约500次工具调用
                 }
-                logger.info(f"ChatStreamAPIView: Set recursion_limit to 100 for thread_id: {thread_id}")
+                logger.info(f"ChatStreamAPIView: Set recursion_limit to 1000 for thread_id: {thread_id}")
                 logger.info(f"ChatStreamAPIView: Input messages structure: {input_messages}")
 
                 # 详细记录每个消息的内容
@@ -1685,7 +1772,13 @@ class ChatStreamAPIView(View):
                     logger.info(f"ChatStreamAPIView: Message {i}: type={type(msg).__name__}, content={repr(msg.content)}")
 
                 # 发送开始信号
-                yield create_sse_data({'type': 'start', 'thread_id': thread_id, 'session_id': session_id, 'project_id': project_id})
+                yield create_sse_data({
+                    'type': 'start', 
+                    'thread_id': thread_id, 
+                    'session_id': session_id, 
+                    'project_id': project_id,
+                    'context_limit': context_limit
+                })
 
                 # 使用astream进行流式处理，支持多种模式
                 stream_modes = ["updates", "messages"]
@@ -1720,6 +1813,31 @@ class ChatStreamAPIView(View):
                 except Exception as e:
                     logger.error(f"ChatStreamAPIView: Error during streaming: {e}", exc_info=True)
                     yield create_sse_data({'type': 'error', 'message': f'Streaming error: {str(e)}'})
+
+                # 计算并发送上下文Token使用信息
+                try:
+                    from requirements.context_limits import context_checker
+                    context_limit = active_config.context_limit or 128000
+                    
+                    # 获取当前会话的所有消息来计算token
+                    current_state = await runnable_to_invoke.aget_state(invoke_config)
+                    all_messages = current_state.values.get("messages", []) if current_state.values else []
+                    
+                    # 计算所有消息的token总数
+                    total_tokens = 0
+                    for msg in all_messages:
+                        if hasattr(msg, 'content') and msg.content:
+                            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+                            total_tokens += context_checker.count_tokens(content, active_config.name or "gpt-4o")
+                    
+                    logger.info(f"[Context Update] Chat mode: {total_tokens}/{context_limit} tokens")
+                    yield create_sse_data({
+                        'type': 'context_update',
+                        'context_token_count': total_tokens,
+                        'context_limit': context_limit
+                    })
+                except Exception as e:
+                    logger.warning(f"ChatStreamAPIView: Failed to calculate token count: {e}")
 
                 # 发送完成信号
                 yield create_sse_data({'type': 'complete'})
@@ -1774,7 +1892,7 @@ class ChatStreamAPIView(View):
         # 知识库相关参数
         knowledge_base_id = body_data.get('knowledge_base_id')
         use_knowledge_base = body_data.get('use_knowledge_base', True)
-        similarity_threshold = body_data.get('similarity_threshold', 0.7)
+        similarity_threshold = body_data.get('similarity_threshold', 0.5)
         top_k = body_data.get('top_k', 5)
 
         # 提示词相关参数
@@ -1816,13 +1934,26 @@ class ChatStreamAPIView(View):
         # 如果是新会话，立即创建ChatSession对象
         if is_new_session:
             try:
+                # 获取关联的提示词对象
+                prompt_obj = None
+                if prompt_id:
+                    try:
+                        prompt_obj = await sync_to_async(UserPrompt.objects.get)(
+                            id=prompt_id,
+                            user=request.user,
+                            is_active=True
+                        )
+                    except UserPrompt.DoesNotExist:
+                        logger.warning(f"ChatStreamAPIView: Prompt {prompt_id} not found or inactive")
+                
                 await sync_to_async(ChatSession.objects.create)(
                     user=request.user,
                     session_id=session_id,
                     project=project,
-                    title=f"新对话 - {user_message_content[:30]}" # 使用消息内容作为临时标题
+                    prompt=prompt_obj,
+                    title=f"新对话 - {user_message_content[:30]}"
                 )
-                logger.info(f"ChatStreamAPIView: Created new ChatSession entry for session_id: {session_id}")
+                logger.info(f"ChatStreamAPIView: Created new ChatSession entry for session_id: {session_id}, prompt_id: {prompt_id}")
             except Exception as e:
                 logger.error(f"ChatStreamAPIView: Failed to create ChatSession entry: {e}", exc_info=True)
 

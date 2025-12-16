@@ -12,11 +12,15 @@ import type {
 // --- 全局流式状态管理 ---
 interface StreamMessage {
   content: string;
-  type: 'human' | 'ai' | 'tool' | 'system';
+  type: 'human' | 'ai' | 'tool' | 'system' | 'agent_step';
   time: string;
   isExpanded?: boolean;
   isThinkingProcess?: boolean;
   isThinkingExpanded?: boolean;
+  // Agent Step 专用字段
+  stepNumber?: number;
+  maxSteps?: number;
+  stepStatus?: 'start' | 'complete' | 'error';
 }
 
 interface StreamState {
@@ -24,18 +28,117 @@ interface StreamState {
   error?: string;
   isComplete: boolean;
   messages: StreamMessage[]; // 存储所有消息,包括工具消息
+  contextTokenCount?: number; // 当前上下文Token数
+  contextLimit?: number; // 上下文Token限制
+  currentStep?: number;  // Agent Loop 当前步骤
+  maxSteps?: number;     // Agent Loop 最大步骤数
+  userMessage?: string;  // 用户发送的消息内容
+  userMessageTime?: string;  // 用户消息时间（会话创建时间）
+  taskId?: number;       // Agent Task ID
+  // ⭐ 脚本生成信息
+  scriptGeneration?: {
+    available: boolean;
+    playwrightSteps: number;
+    message: string;
+  };
+}
+
+// Agent Loop SSE 事件类型定义（供文档和类型参考）
+export interface AgentLoopSseEvent {
+  type: string;
+  session_id?: string;
+  context_limit?: number;
+  context_token_count?: number;
+  max_steps?: number | string;
+  step?: number | string;
+  summary?: string | Record<string, unknown>;
+  message?: string;
+  data?: string | { content?: string } | Record<string, unknown> | null;
+}
+
+// 格式化时间辅助函数
+const formatStreamTime = (): string => {
+  const now = new Date();
+  return `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+};
+
+// 格式化 ISO 时间字符串为显示格式
+const formatIsoTime = (isoString: string | null | undefined): string => {
+  if (!isoString) return formatStreamTime();
+  try {
+    const date = new Date(isoString);
+    if (isNaN(date.getTime())) return formatStreamTime();
+    return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+  } catch {
+    return formatStreamTime();
+  }
+};
+
+// 数字字段归一化（处理字符串或数字类型）
+const normalizeNumericField = (value: unknown): number | undefined => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+};
+
+// 解析消息内容 - 支持 Agent Loop 纯文本和旧 LangGraph 格式
+const parseMessageContent = (data: unknown): string => {
+  if (typeof data === 'string') {
+    // 旧 LangGraph 格式: AIMessageChunk(content='xxx')
+    if (data.includes('AIMessageChunk')) {
+      const match = data.match(/content='((?:\\'|[^'])*)'/);
+      if (match && match[1] !== undefined) {
+        return match[1].replace(/\\'/g, "'");
+      }
+    }
+    // Agent Loop 纯文本格式
+    return data;
+  }
+  // 对象格式 { content: string }
+  if (data && typeof data === 'object' && 'content' in data && typeof (data as Record<string, unknown>).content === 'string') {
+    return (data as Record<string, unknown>).content as string;
+  }
+  return '';
+};
+
+// 安全的 JSON 序列化（防止循环引用导致崩溃）
+const safeStringify = (value: unknown): string => {
+  if (typeof value === 'string') return value;
+  if (value === null || value === undefined) return '';
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return '[无法序列化的数据]';
+  }
+};
+
+// 上下文使用快照（独立缓存，不受clearStreamState影响）
+interface ContextUsageSnapshot {
+  tokenCount: number;
+  limit: number;
 }
 
 export const activeStreams = ref<Record<string, StreamState>>({});
+export const latestContextUsage = ref<Record<string, ContextUsageSnapshot>>({});
 
 export const clearStreamState = (sessionId: string) => {
   if (activeStreams.value[sessionId]) {
     delete activeStreams.value[sessionId];
   }
+  // 注意：不清除 latestContextUsage，保留最后的Token使用信息
 };
 // --- 全局流式状态管理结束 ---
 
 const API_BASE_URL = '/lg/chat';
+// Agent Loop API 端点 - 解决 Token 累积问题
+const AGENT_LOOP_API_URL = '/orchestrator/agent-loop';
 
 // 获取API基础URL
 function getApiBaseUrl() {
@@ -150,7 +253,7 @@ export async function sendChatMessageStream(
   }
 
   try {
-    let response = await fetch(`${getApiBaseUrl()}${API_BASE_URL}/stream/`, {
+    let response = await fetch(`${getApiBaseUrl()}${AGENT_LOOP_API_URL}/`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -165,7 +268,7 @@ export async function sendChatMessageStream(
       const newToken = await refreshAccessToken();
       if (newToken) {
         token = newToken;
-        response = await fetch(`${getApiBaseUrl()}${API_BASE_URL}/stream/`, {
+        response = await fetch(`${getApiBaseUrl()}${AGENT_LOOP_API_URL}/`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -195,7 +298,41 @@ export async function sendChatMessageStream(
     let buffer = '';
     while (true) {
       const { done, value } = await reader.read();
+      
       if (done) {
+        // 流结束时，处理buffer中剩余的数据
+        if (buffer.trim()) {
+          const remainingLines = buffer.split('\n');
+          for (const line of remainingLines) {
+            if (line.trim() === '' || !line.startsWith('data: ')) continue;
+            
+            const jsonData = line.slice(6);
+            if (jsonData === '[DONE]') continue;
+            
+            try {
+              const parsed = JSON.parse(jsonData);
+              
+              // 处理上下文Token更新事件
+              if (parsed.type === 'context_update' && streamSessionId) {
+                const tokenCount = parsed.context_token_count ?? 0;
+                const limit = parsed.context_limit ?? 128000;
+                latestContextUsage.value[streamSessionId] = { tokenCount, limit };
+                
+                if (activeStreams.value[streamSessionId]) {
+                  activeStreams.value[streamSessionId].contextTokenCount = tokenCount;
+                  activeStreams.value[streamSessionId].contextLimit = limit;
+                }
+              }
+              
+              if (parsed.type === 'complete' && streamSessionId && activeStreams.value[streamSessionId]) {
+                activeStreams.value[streamSessionId].isComplete = true;
+              }
+            } catch (e) {
+              console.warn('Failed to parse remaining SSE data:', line);
+            }
+          }
+        }
+        
         // 流结束时，如果会话仍在进行中，则标记为完成
         if (streamSessionId && activeStreams.value[streamSessionId] && !activeStreams.value[streamSessionId].isComplete) {
             activeStreams.value[streamSessionId].isComplete = true;
@@ -229,17 +366,113 @@ export async function sendChatMessageStream(
           if (parsed.type === 'start' && parsed.session_id) {
             streamSessionId = parsed.session_id;
             if (streamSessionId) {
-              // 初始化或重置此会话的流状态
+              // 从缓存中获取上一次的token使用信息，避免闪烁
+              const cachedUsage = latestContextUsage.value[streamSessionId];
+              const prevTokenCount = cachedUsage?.tokenCount || 0;
+              const contextLimit = parsed.context_limit || cachedUsage?.limit || 128000;
+              const initialMaxSteps = normalizeNumericField(parsed.max_steps);
+
+              // 初始化或重置此会话的流状态，保留之前的token信息
               activeStreams.value[streamSessionId] = {
                 content: '',
                 isComplete: false,
-                messages: []
+                messages: [],
+                contextTokenCount: prevTokenCount,
+                contextLimit: contextLimit,
+                currentStep: 0,
+                maxSteps: initialMaxSteps,
+                userMessage: data.message, // 保存用户消息
+                userMessageTime: formatIsoTime(parsed.created_at) // 使用会话创建时间
               };
               onStart(streamSessionId);
             }
           }
 
-          // 处理工具消息(update事件)
+          // 处理上下文Token更新事件
+          if (parsed.type === 'context_update' && streamSessionId) {
+            const tokenCount = parsed.context_token_count ?? 0;
+            const limit = parsed.context_limit ?? 128000;
+            
+            // 总是更新独立缓存（优先保证缓存被更新）
+            latestContextUsage.value[streamSessionId] = { tokenCount, limit };
+            
+            // 如果活跃流还存在，也更新它
+            if (activeStreams.value[streamSessionId]) {
+              activeStreams.value[streamSessionId].contextTokenCount = tokenCount;
+              activeStreams.value[streamSessionId].contextLimit = limit;
+            }
+          }
+
+          // 处理警告事件（如上下文即将满）
+          if (parsed.type === 'warning' && streamSessionId && activeStreams.value[streamSessionId]) {
+            const warningMessage = parsed.message || '警告';
+            console.warn('[Chat] Warning:', warningMessage);
+            activeStreams.value[streamSessionId].messages.push({
+              content: warningMessage,
+              type: 'system',
+              time: formatStreamTime()
+            });
+          }
+
+          // 处理 Agent Loop 步骤开始事件
+          if (parsed.type === 'step_start' && streamSessionId && activeStreams.value[streamSessionId]) {
+            const stepNumber = normalizeNumericField(parsed.step);
+            const maxSteps = normalizeNumericField(parsed.max_steps);
+            console.log('[step_start] raw:', parsed.step, parsed.max_steps, '| normalized:', stepNumber, maxSteps);
+            if (maxSteps !== undefined) {
+              activeStreams.value[streamSessionId].maxSteps = maxSteps;
+            }
+            if (stepNumber !== undefined) {
+              activeStreams.value[streamSessionId].currentStep = stepNumber;
+            }
+            activeStreams.value[streamSessionId].messages.push({
+              content: '',
+              type: 'agent_step',
+              time: formatStreamTime(),
+              stepNumber: stepNumber,
+              maxSteps: maxSteps,
+              stepStatus: 'start',
+              isThinkingProcess: true
+            });
+            console.log('[step_start] pushed message with stepNumber:', stepNumber, 'maxSteps:', maxSteps);
+          }
+
+          // 处理 Agent Loop 步骤完成事件
+          if (parsed.type === 'step_complete' && streamSessionId && activeStreams.value[streamSessionId]) {
+            const stepNumber = normalizeNumericField(parsed.step);
+            if (stepNumber !== undefined) {
+              activeStreams.value[streamSessionId].currentStep = stepNumber;
+            }
+            // ✅ 移除step_complete的重复分隔符显示
+            // step_start已经插入了分隔符,step_complete不需要再显示
+          }
+
+          // 处理 Agent Loop 工具结果事件
+          if (parsed.type === 'tool_result' && streamSessionId && activeStreams.value[streamSessionId]) {
+            const summary = parsed.summary;
+            const toolContent = safeStringify(summary);
+            if (toolContent) {
+              const time = formatStreamTime();
+              // 如果当前有AI流式内容,先将其固化为独立消息
+              if (activeStreams.value[streamSessionId].content && activeStreams.value[streamSessionId].content.trim()) {
+                activeStreams.value[streamSessionId].messages.push({
+                  content: activeStreams.value[streamSessionId].content,
+                  type: 'ai',
+                  time: time,
+                  isExpanded: false
+                });
+                activeStreams.value[streamSessionId].content = '';
+              }
+              activeStreams.value[streamSessionId].messages.push({
+                content: toolContent,
+                type: 'tool',
+                time: time,
+                isExpanded: false
+              });
+            }
+          }
+
+          // 处理工具消息(update事件) - 兼容旧 LangGraph 格式
           if (parsed.type === 'update' && streamSessionId && activeStreams.value[streamSessionId]) {
             const updateData = parsed.data;
             if (typeof updateData === 'string') {
@@ -249,16 +482,12 @@ export async function sendChatMessageStream(
                 try {
                   // 提取工具消息内容
                   const contentMatch = updateData.match(/content='([^']*(?:\\'[^']*)*)'/);
-                  const nameMatch = updateData.match(/name='([^']*)'/);
                   
                   if (contentMatch) {
                     const toolContent = contentMatch[1].replace(/\\'/g, "'").replace(/\\n/g, '\n');
-                    const toolName = nameMatch ? nameMatch[1] : 'tool';
+                    const time = formatStreamTime();
                     
-                    const now = new Date();
-                    const time = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-                    
-                    // 🔧 如果当前有AI流式内容,先将其固化为独立消息
+                    // 如果当前有AI流式内容,先将其固化为独立消息
                     if (activeStreams.value[streamSessionId].content && activeStreams.value[streamSessionId].content.trim()) {
                       activeStreams.value[streamSessionId].messages.push({
                         content: activeStreams.value[streamSessionId].content,
@@ -266,7 +495,6 @@ export async function sendChatMessageStream(
                         time: time,
                         isExpanded: false
                       });
-                      // 清空AI内容,准备接收新的内容
                       activeStreams.value[streamSessionId].content = '';
                     }
                     
@@ -285,24 +513,47 @@ export async function sendChatMessageStream(
             }
           }
 
-          // 处理AI消息(message事件)
+          // ⭐ 处理真正的流式输出 (type === 'stream') - Agent Loop 逐字流式
+          if (parsed.type === 'stream' && streamSessionId && activeStreams.value[streamSessionId]) {
+            const content = parsed.data;
+            if (content) {
+              activeStreams.value[streamSessionId].content += content;
+            }
+          }
+
+          // ⭐ 流式结束事件
+          if (parsed.type === 'stream_end' && streamSessionId && activeStreams.value[streamSessionId]) {
+            // 流式结束，内容已通过 stream 事件累积
+            // 不需要特殊处理，等待 complete 事件标记完成
+          }
+
+          // 处理AI消息(message事件) - 兼容旧格式（非流式模式）
           if (parsed.type === 'message' && streamSessionId && activeStreams.value[streamSessionId]) {
-            const messageData = parsed.data;
-            if (typeof messageData === 'string') {
-              let content = '';
-              if (messageData.includes('AIMessageChunk')) {
-                 const match = messageData.match(/content='((?:\\'|[^'])*)'/);
-                 if(match && match[1] !== undefined) {
-                    content = match[1].replace(/\\'/g, "'");
-                 }
-              }
-              // 在这里直接更新全局状态
+            const content = parseMessageContent(parsed.data);
+            if (content) {
               activeStreams.value[streamSessionId].content += content;
             }
           }
 
           if (parsed.type === 'complete' && streamSessionId && activeStreams.value[streamSessionId]) {
+            // ✅ 修复：标记完成，保持content不变（Vue组件会从content读取最终消息）
+            // 不清空content，因为displayedMessages和watch都依赖stream.content来显示最终AI回复
             activeStreams.value[streamSessionId].isComplete = true;
+            
+            // ⭐ 保存任务 ID
+            if (parsed.task_id) {
+              activeStreams.value[streamSessionId].taskId = parsed.task_id;
+            }
+            
+            // ⭐ 处理脚本生成信息
+            if (parsed.script_generation && parsed.script_generation.available) {
+              activeStreams.value[streamSessionId].scriptGeneration = {
+                available: true,
+                playwrightSteps: parsed.script_generation.playwright_steps || 0,
+                message: parsed.script_generation.message || '可生成自动化用例'
+              };
+              console.log('[ChatService] Script generation available:', parsed.script_generation);
+            }
           }
         } catch (e) {
           console.warn('Failed to parse SSE data:', jsonData);

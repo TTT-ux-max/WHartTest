@@ -29,26 +29,21 @@
           <span class="prompt-label">提示词：</span>
           <a-select
             v-model="selectedPromptId"
-            :placeholder="selectedPromptId === null && defaultPrompt ? defaultPrompt.name : '选择提示词'"
+            :placeholder="defaultPrompt ? defaultPrompt.name : '选择提示词'"
             style="width: 200px"
             allow-clear
             @change="handlePromptChange"
             :loading="promptsLoading"
+            :fallback-option="false"
           >
             <a-option
-              :value="null"
-              :label="defaultPrompt ? defaultPrompt.name : '使用默认'"
-            >
-              <span>{{ defaultPrompt ? defaultPrompt.name : '使用默认' }}</span>
-              <a-tag v-if="defaultPrompt" color="blue" size="small" style="margin-left: 8px;">默认</a-tag>
-            </a-option>
-            <a-option
-              v-for="prompt in nonDefaultUserPrompts"
+              v-for="prompt in userPrompts"
               :key="prompt.id"
               :value="prompt.id"
               :label="prompt.name"
             >
               <span>{{ prompt.name }}</span>
+              <a-tag v-if="prompt.is_default" color="blue" size="small" style="margin-left: 8px;">默认</a-tag>
             </a-option>
           </a-select>
         </div>
@@ -60,6 +55,15 @@
           </template>
           管理提示词
         </a-button>
+        
+        <!-- LLM配置按钮 -->
+        <a-button v-if="!brainMode" type="text" @click="goToLlmConfigs">
+          <template #icon>
+            <icon-settings />
+          </template>
+          LLM配置
+        </a-button>
+        
         <a-tag v-if="sessionId" color="green">会话ID: {{ sessionIdShort }}</a-tag>
         <a-button v-if="hasMessages" type="text" status="danger" @click="$emit('clear-chat')">
           <template #icon>
@@ -91,11 +95,14 @@
 
 <script setup lang="ts">
 import { computed, ref, onMounted, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { Button as AButton, Tag as ATag, Switch as ASwitch, Select as ASelect, Option as AOption } from '@arco-design/web-vue';
-import { IconDelete } from '@arco-design/web-vue/es/icon';
+import { IconDelete, IconSettings } from '@arco-design/web-vue/es/icon';
 import KnowledgeBaseSelector from './KnowledgeBaseSelector.vue';
 import { getUserPrompts, getDefaultPrompt } from '@/features/prompts/services/promptService';
 import type { UserPrompt } from '@/features/prompts/types/prompt';
+
+const router = useRouter();
 
 interface Props {
   sessionId: string;
@@ -131,16 +138,16 @@ const sessionIdShort = computed(() => {
   return props.sessionId.length > 8 ? `${props.sessionId.substring(0, 8)}...` : props.sessionId;
 });
 
+// 跳转到LLM配置页面
+const goToLlmConfigs = () => {
+  router.push('/llm-configs');
+};
+
 // 提示词相关数据
 const selectedPromptId = ref<number | null>(props.selectedPromptId);
 const userPrompts = ref<UserPrompt[]>([]);
 const defaultPrompt = ref<UserPrompt | null>(null);
 const promptsLoading = ref(false);
-
-// 过滤掉默认提示词的用户提示词列表（避免重复显示）
-const nonDefaultUserPrompts = computed(() => {
-  return userPrompts.value.filter(prompt => !prompt.is_default);
-});
 
 // 加载用户提示词
 const loadUserPrompts = async () => {
@@ -191,16 +198,26 @@ const loadUserPrompts = async () => {
         return a.name.localeCompare(b.name);
       });
       console.log('📋 ChatHeader加载到的提示词列表:', userPrompts.value.map(p => ({ id: p.id, name: p.name, isDefault: p.is_default, type: p.prompt_type })));
+
+      // 🆕 检查当前选中的提示词是否在允许的列表中
+      if (selectedPromptId.value !== null) {
+        const selectedExists = userPrompts.value.some(p => p.id === selectedPromptId.value);
+        if (!selectedExists) {
+          console.log(`⚠️ 当前选中的提示词(ID:${selectedPromptId.value})不在允许列表中，重置选择`);
+          selectedPromptId.value = null;
+          emit('update:selected-prompt-id', null);
+        }
+      }
     }
 
     if (defaultResponse.status === 'success' && defaultResponse.data) {
       defaultPrompt.value = defaultResponse.data;
       console.log('🌟 ChatHeader加载到的默认提示词:', defaultPrompt.value.name);
 
-      // 如果当前没有选择提示词且有默认提示词，则初始化为使用默认提示词
+      // 如果当前没有选择提示词且有默认提示词，则自动选中默认提示词
       if (selectedPromptId.value === null && !props.selectedPromptId) {
-        // 不需要设置selectedPromptId，保持null表示使用默认
-        emit('update:selected-prompt-id', null);
+        selectedPromptId.value = defaultPrompt.value.id;
+        emit('update:selected-prompt-id', defaultPrompt.value.id);
       }
     } else {
       console.log('❌ ChatHeader未找到默认提示词');
